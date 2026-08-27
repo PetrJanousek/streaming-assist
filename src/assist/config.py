@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     enrich_tokens_out: int = Field(default=180, ge=1)
     # T12 index job. Embedder MAX_TEXTS is 256; stay at or below that.
     index_batch_size: int = Field(default=64, ge=1, le=256)
+    # T17 hot-path search. The T06 client still uses 30s for bootstrap/index jobs.
+    elasticsearch_timeout_ms: int = Field(default=1500, gt=0)
+    retrieve_size: int = Field(default=25, ge=1, le=50)
+    retrieve_each_k: int = Field(default=50, ge=1)
+    retrieve_franchise_cap: int = Field(default=1, ge=1)
 
     @field_validator("llm_provider", mode="before")
     @classmethod

@@ -362,7 +362,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T17 — Retrieval node
+### [x] T17 — Retrieval node
 **Deps:** T06, T09, T12 · **Branch:** `task/T17-retrieval`
 
 **Owns:** `src/assist/nodes/retrieval.py`, `tests/test_retrieval.py`
