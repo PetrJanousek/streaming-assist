@@ -267,7 +267,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T09 — Graph skeleton
+### [x] T09 — Graph skeleton
 **Deps:** T01, T02 · **Branch:** `task/T09-graph`
 
 **Owns:** `src/assist/graph/state.py`, `edges.py`, `build.py`, `src/assist/nodes/__init__.py`, `tests/test_graph_shape.py`

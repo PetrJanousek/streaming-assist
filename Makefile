@@ -1,4 +1,4 @@
-.PHONY: lint typecheck test fmt up down logs ps shell seed
+.PHONY: lint typecheck test fmt up down logs ps shell seed graph
 
 COMPOSE ?= docker compose
 
@@ -35,3 +35,7 @@ shell:
 
 seed:
 	$(COMPOSE) --profile tools run --rm jobs seed-all
+
+# Architecture diagram from the compiled graph, not a hand-drawn copy.
+graph:
+	uv run python -c "from assist.graph.build import export_mermaid; export_mermaid()"
