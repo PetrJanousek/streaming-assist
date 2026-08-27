@@ -395,7 +395,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T20 — Availability node + CatalogClient
+### [x] T20 — Availability node + CatalogClient
 **Deps:** T04, T05, T09 · **Branch:** `task/T20-availability`
 
 **Owns:** `src/assist/nodes/availability.py`, `src/assist/stores/catalog_client.py`, `tests/test_availability.py`

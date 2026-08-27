@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     embedder_url: str = "http://localhost:8080"
     embedder_timeout_ms: int = Field(default=5000, gt=0)
     embedder_retries: int = Field(default=2, ge=0)
+    # T20: CatalogClient budget. Timeout fails closed (drop the candidate).
+    catalog_timeout_ms: int = Field(default=500, gt=0)
 
     @field_validator("llm_provider", mode="before")
     @classmethod
