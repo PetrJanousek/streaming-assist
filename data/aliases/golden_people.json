@@ -1,0 +1,32 @@
+{
+  "queries": [
+    {"query": "Adam Sandler", "expect_name": "Adam Sandler"},
+    {"query": "Shah Rukh Khan", "expect_name": "Shah Rukh Khan"},
+    {"query": "SRK", "expect_name": "Shah Rukh Khan"},
+    {"query": "Dwayne Johnson", "expect_name": "Dwayne Johnson"},
+    {"query": "the rock", "expect_name": "Dwayne Johnson"},
+    {"query": "David Attenborough", "expect_name": "David Attenborough"},
+    {"query": "Ryan Reynolds", "expect_name": "Ryan Reynolds"},
+    {"query": "Kevin Hart", "expect_name": "Kevin Hart"},
+    {"query": "Samuel L. Jackson", "expect_name": "Samuel L. Jackson"},
+    {"query": "Nicolas Cage", "expect_name": "Nicolas Cage"},
+    {"query": "Nic Cage", "expect_name": "Nicolas Cage"},
+    {"query": "Akshay Kumar", "expect_name": "Akshay Kumar"},
+    {"query": "Priyanka Chopra", "expect_name": "Priyanka Chopra"},
+    {"query": "Leonardo DiCaprio", "expect_name": "Leonardo DiCaprio"},
+    {"query": "Leo DiCaprio", "expect_name": "Leonardo DiCaprio"},
+    {"query": "Tom Hanks", "expect_name": "Tom Hanks"},
+    {"query": "Steven Spielberg", "expect_name": "Steven Spielberg"},
+    {"query": "Spielberg", "expect_name": "Steven Spielberg"},
+    {"query": "Quentin Tarantino", "expect_name": "Quentin Tarantino"},
+    {"query": "Morgan Freeman", "expect_name": "Morgan Freeman"},
+    {"query": "Will Smith", "expect_name": "Will Smith"},
+    {"query": "Christopher Nolan", "expect_name": "Christopher Nolan"},
+    {"query": "Nolan", "expect_name": "Christopher Nolan"},
+    {"query": "Robert Downey Jr.", "expect_name": "Robert Downey Jr."},
+    {"query": "RDJ", "expect_name": "Robert Downey Jr."},
+    {"query": "Jennifer Aniston", "expect_name": "Jennifer Aniston"},
+    {"query": "Anupam Kher", "expect_name": "Anupam Kher"},
+    {"query": "Chris Hemsworth", "expect_name": "Chris Hemsworth"}
+  ]
+}

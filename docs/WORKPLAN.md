@@ -373,7 +373,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T18 — People resolver node
+### [x] T18 — People resolver node
 **Deps:** T06, T09, T12 · **Branch:** `task/T18-people`
 
 **Owns:** `src/assist/nodes/people.py`, `data/aliases/*`, `tests/test_people.py`
