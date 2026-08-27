@@ -234,7 +234,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T06 — Elasticsearch client, mappings, index bootstrap
+### [x] T06 — Elasticsearch client, mappings, index bootstrap
 **Deps:** T01, T02 · **Branch:** `task/T06-es`
 
 **Owns:** `src/assist/stores/es.py`, `src/assist/stores/mappings/*`, `tests/test_es.py`
