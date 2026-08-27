@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     retrieve_max_attempts: int = Field(default=2, ge=1)
     # Design threat model: max input 500 chars. Longer is a cost/injection vector.
     guard_max_chars: int = Field(default=500, ge=1)
+    # Post-sanitize reply cap (design.md reliability layer 5: length caps + title-span).
+    reply_max_chars: int = Field(default=600, ge=1)
 
     # Observability
     langsmith_tracing: bool = False

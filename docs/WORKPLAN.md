@@ -406,7 +406,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T21 — Sanitize, chips, persist nodes
+### [x] T21 — Sanitize, chips, persist nodes
 **Deps:** T02, T04, T05, T09 · **Branch:** `task/T21-sanitize-chips-persist`
 
 **Owns:** `src/assist/nodes/sanitize.py`, `chips.py`, `persist.py`, `tests/test_chips.py`, `tests/test_persist.py`
