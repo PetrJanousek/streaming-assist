@@ -384,7 +384,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T19 — Rank node
+### [x] T19 — Rank node
 **Deps:** T09, T17 · **Branch:** `task/T19-rank`
 
 **Owns:** `src/assist/nodes/rank.py`, `tests/test_rank.py`
