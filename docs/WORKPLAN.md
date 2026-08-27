@@ -212,7 +212,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T04 — Postgres: schema, migrations, repositories
+### [x] T04 — Postgres: schema, migrations, repositories
 **Deps:** T01, T02 · **Branch:** `task/T04-postgres`
 
 **Owns:** `src/assist/stores/db.py`, `migrations/*`, `alembic.ini`, `tests/test_db.py`

@@ -55,6 +55,8 @@ class Settings(BaseSettings):
 
     # Stores — host-side defaults; compose will override inside the network (T03).
     postgres_dsn: str = "postgresql+asyncpg://assist:assist@localhost:5432/assist"
+    postgres_pool_size: int = Field(default=5, ge=1)
+    postgres_max_overflow: int = Field(default=10, ge=0)
     redis_url: str = "redis://localhost:6379/0"
     elasticsearch_url: str = "http://localhost:9200"
     embedder_url: str = "http://localhost:8080"
