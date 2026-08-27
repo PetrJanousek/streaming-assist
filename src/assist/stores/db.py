@@ -549,6 +549,31 @@ class AvailabilityRepository:
             playable=row.playable,
         )
 
+    async def list_for_package_geo(
+        self, catalog_ids: list[str], package: Package, geo: str
+    ) -> list[AvailabilityWindow]:
+        """Batch lookup for one package+geo. Missing ids are omitted, not invented."""
+        if not catalog_ids:
+            return []
+        result = await self._session.execute(
+            select(AvailabilityRow).where(
+                AvailabilityRow.catalog_id.in_(catalog_ids),
+                AvailabilityRow.package == package.value,
+                AvailabilityRow.geo == geo,
+            )
+        )
+        return [
+            AvailabilityWindow(
+                catalog_id=row.catalog_id,
+                package=Package(row.package),
+                geo=row.geo,
+                window_start=row.window_start,
+                window_end=row.window_end,
+                playable=row.playable,
+            )
+            for row in result.scalars()
+        ]
+
 
 class TaxonomyRepository:
     def __init__(self, session: AsyncSession) -> None:
