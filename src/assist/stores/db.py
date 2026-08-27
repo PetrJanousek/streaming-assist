@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.sql import update
 
 from assist.config import Settings, settings
 from assist.domain.catalog import Person, Title
@@ -448,6 +449,46 @@ class TitleRepository:
             title=_title_from_row(row), enrichment=enrichment, indexed_at=row.indexed_at
         )
 
+    async def count(self, *, unenriched_only: bool = False) -> int:
+        stmt = select(func.count()).select_from(TitleRow)
+        if unenriched_only:
+            # JSONB persists Python None as JSON null, not SQL NULL.
+            stmt = stmt.where(sql_text("enrichment IS NULL OR enrichment = 'null'::jsonb"))
+        result = await self._session.scalar(stmt)
+        return int(result or 0)
+
+    async def list_stored(
+        self,
+        *,
+        limit: int | None = None,
+        unenriched_only: bool = False,
+    ) -> list[TitleRecord]:
+        stmt = select(TitleRow).order_by(TitleRow.catalog_id)
+        if unenriched_only:
+            stmt = stmt.where(sql_text("enrichment IS NULL OR enrichment = 'null'::jsonb"))
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        result = await self._session.execute(stmt)
+        records: list[TitleRecord] = []
+        for row in result.scalars():
+            enrichment = dict(row.enrichment) if row.enrichment is not None else None
+            records.append(
+                TitleRecord(
+                    title=_title_from_row(row),
+                    enrichment=enrichment,
+                    indexed_at=row.indexed_at,
+                )
+            )
+        return records
+
+    async def set_enrichment(self, catalog_id: str, enrichment: Mapping[str, object]) -> None:
+        stmt = (
+            update(TitleRow)
+            .where(TitleRow.catalog_id == catalog_id)
+            .values(enrichment=dict(enrichment))
+        )
+        await self._session.execute(stmt)
+
 
 class PersonRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -511,6 +552,26 @@ class CreditRepository:
             )
             for row in result.scalars()
         ]
+
+    async def names_for_titles(
+        self, catalog_ids: list[str], *, per_title: int = 5
+    ) -> dict[str, list[str]]:
+        """Cast/director display names per title, actors first, stable order."""
+        if not catalog_ids:
+            return {}
+        stmt = (
+            select(CreditRow.catalog_id, CreditRow.role, PersonRow.name)
+            .join(PersonRow, PersonRow.person_id == CreditRow.person_id)
+            .where(CreditRow.catalog_id.in_(catalog_ids))
+            .order_by(CreditRow.catalog_id, CreditRow.role, PersonRow.name)
+        )
+        result = await self._session.execute(stmt)
+        out: dict[str, list[str]] = {catalog_id: [] for catalog_id in catalog_ids}
+        for catalog_id, _role, name in result:
+            bucket = out.setdefault(catalog_id, [])
+            if len(bucket) < per_title:
+                bucket.append(name)
+        return out
 
 
 class AvailabilityRepository:

@@ -292,7 +292,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T11 — Enrichment job
+### [x] T11 — Enrichment job
 **Deps:** T08, T10 · **Branch:** `task/T11-enrich`
 
 **Owns:** `src/assist/jobs/enrich.py`, `data/enriched/*`, `tests/test_enrich.py`

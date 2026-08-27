@@ -20,6 +20,14 @@ class LLMProvider(StrEnum):
     NONE = "none"
 
 
+class EnrichMode(StrEnum):
+    """Offline enrichment job. `skip` imports the committed JSONL (no API key)."""
+
+    SKIP = "skip"
+    LLM = "llm"
+    NONE = "none"
+
+
 class Settings(BaseSettings):
     """Env-backed settings. Unknown *values* raise; they never fall back."""
 
@@ -77,6 +85,13 @@ class Settings(BaseSettings):
     # T20: CatalogClient budget. Timeout fails closed (drop the candidate).
     catalog_timeout_ms: int = Field(default=500, gt=0)
 
+    # Enrichment job (T11). skip = import committed JSONL, no Haiku spend.
+    enrich: EnrichMode = EnrichMode.SKIP
+    enrich_limit: int = Field(default=2500, ge=1)
+    enrich_concurrency: int = Field(default=8, ge=1)
+    enrich_tokens_in: int = Field(default=350, ge=1)
+    enrich_tokens_out: int = Field(default=180, ge=1)
+
     @field_validator("llm_provider", mode="before")
     @classmethod
     def _normalize_provider(cls, value: object) -> object:
@@ -89,6 +104,13 @@ class Settings(BaseSettings):
     def _normalize_log_level(cls, value: object) -> object:
         if isinstance(value, str):
             return value.strip().upper()
+        return value
+
+    @field_validator("enrich", mode="before")
+    @classmethod
+    def _normalize_enrich(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
         return value
 
     @model_validator(mode="after")
