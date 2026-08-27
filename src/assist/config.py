@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     rate_limit_burst: int = Field(default=20, gt=0)
     hard_timeout_ms: int = Field(default=8000, gt=0)
     retrieve_max_attempts: int = Field(default=2, ge=1)
+    # Design threat model: max input 500 chars. Longer is a cost/injection vector.
+    guard_max_chars: int = Field(default=500, ge=1)
 
     # Observability
     langsmith_tracing: bool = False

@@ -329,7 +329,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T14 — Guard node
+### [x] T14 — Guard node
 **Deps:** T09 · **Branch:** `task/T14-guard`
 
 **Owns:** `src/assist/nodes/guard.py`, `data/guard/*`, `tests/test_guard.py`
