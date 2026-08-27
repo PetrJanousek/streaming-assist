@@ -22,6 +22,7 @@ from sqlalchemy import (
     Text,
     func,
     select,
+    update,
 )
 from sqlalchemy import (
     text as sql_text,
@@ -35,7 +36,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.sql import update
 
 from assist.config import Settings, settings
 from assist.domain.catalog import Person, Title
@@ -481,12 +481,35 @@ class TitleRepository:
             )
         return records
 
+    async def scan(self, *, after_id: str | None = None, limit: int = 500) -> list[TitleRecord]:
+        """Keyset page in catalog_id order. T12 streams ~8k titles this way."""
+        stmt = select(TitleRow).order_by(TitleRow.catalog_id)
+        if after_id is not None:
+            stmt = stmt.where(TitleRow.catalog_id > after_id)
+        stmt = stmt.limit(limit)
+        result = await self._session.execute(stmt)
+        records: list[TitleRecord] = []
+        for row in result.scalars():
+            enrichment = dict(row.enrichment) if row.enrichment is not None else None
+            records.append(
+                TitleRecord(
+                    title=_title_from_row(row), enrichment=enrichment, indexed_at=row.indexed_at
+                )
+            )
+        return records
+
     async def set_enrichment(self, catalog_id: str, enrichment: Mapping[str, object]) -> None:
         stmt = (
             update(TitleRow)
             .where(TitleRow.catalog_id == catalog_id)
             .values(enrichment=dict(enrichment))
         )
+        await self._session.execute(stmt)
+
+    async def mark_indexed(self, catalog_ids: list[str], when: datetime) -> None:
+        if not catalog_ids:
+            return
+        stmt = update(TitleRow).where(TitleRow.catalog_id.in_(catalog_ids)).values(indexed_at=when)
         await self._session.execute(stmt)
 
 
@@ -522,6 +545,26 @@ class PersonRepository:
     async def get(self, person_id: str) -> Person | None:
         row = await self._session.get(PersonRow, person_id)
         return None if row is None else _person_from_row(row)
+
+    async def count(self) -> int:
+        n = await self._session.scalar(select(func.count()).select_from(PersonRow))
+        return int(n or 0)
+
+    async def scan(self, *, after_id: str | None = None, limit: int = 500) -> list[Person]:
+        stmt = select(PersonRow).order_by(PersonRow.person_id)
+        if after_id is not None:
+            stmt = stmt.where(PersonRow.person_id > after_id)
+        stmt = stmt.limit(limit)
+        result = await self._session.execute(stmt)
+        return [_person_from_row(row) for row in result.scalars()]
+
+    async def get_many(self, person_ids: list[str]) -> list[Person]:
+        if not person_ids:
+            return []
+        result = await self._session.execute(
+            select(PersonRow).where(PersonRow.person_id.in_(person_ids))
+        )
+        return [_person_from_row(row) for row in result.scalars()]
 
 
 class CreditRepository:
@@ -572,6 +615,23 @@ class CreditRepository:
             if len(bucket) < per_title:
                 bucket.append(name)
         return out
+
+    async def list_for_titles(self, catalog_ids: list[str]) -> list[CreditRecord]:
+        if not catalog_ids:
+            return []
+        result = await self._session.execute(
+            select(CreditRow)
+            .where(CreditRow.catalog_id.in_(catalog_ids))
+            .order_by(CreditRow.catalog_id, CreditRow.role, CreditRow.person_id)
+        )
+        return [
+            CreditRecord(
+                catalog_id=row.catalog_id,
+                person_id=row.person_id,
+                role=CreditRole(row.role),
+            )
+            for row in result.scalars()
+        ]
 
 
 class AvailabilityRepository:

@@ -303,7 +303,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T12 — Index job
+### [x] T12 — Index job
 **Deps:** T06, T07, T10 · **Branch:** `task/T12-index`
 
 **Owns:** `src/assist/jobs/index.py`, `tests/test_index.py`
