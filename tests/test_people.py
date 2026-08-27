@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -79,6 +81,15 @@ class BoomSearcher:
     ) -> tuple[Person, ...]:
         del name, roles, year_min, year_max, size
         raise RuntimeError("es down")
+
+
+class SlowEs:
+    """Ignores request_timeout and sleeps the 30s client default."""
+
+    async def search(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        await asyncio.sleep(30.0)
+        return {"hits": {"hits": []}}
 
 
 def _ctx() -> ServerUserCtx:
@@ -175,13 +186,25 @@ async def live_searcher() -> AsyncIterator[EsPeopleSearcher]:
 def test_name_confidence_exact_and_surname_and_prefix() -> None:
     assert name_confidence("Will Smith", "Will Smith") == 1.0
     assert name_confidence("nolan", "Christopher Nolan") == pytest.approx(0.86)
-    assert name_confidence("nolan", "Nolan North") == pytest.approx(0.58)
+    assert name_confidence("nolan", "Nolan North") == pytest.approx(0.99)
     # Initials are not indexed (edge-ngram min_gram=2), so they drop out of both sides.
     assert name_confidence("Samuel Jackson", "Samuel L. Jackson") == 1.0
     assert name_confidence("Nic Cage", "Nicolas Cage") >= 0.75
     assert name_confidence("Leo DiCaprio", "Leonardo DiCaprio") >= 0.75
     assert name_confidence("Will Smith", "Willow Smith") < 1.0
     assert name_confidence("the rock", "Dwayne Johnson") == 0.0
+
+
+def test_exact_token_never_ranks_below_prefix() -> None:
+    # Prefix of a longer token ("chris"/"christina") used to outrank the exact
+    # given name, so Chris Rock dropped out of the clarify set.
+    assert name_confidence("Chris", "Chris Rock") >= name_confidence("Chris", "Christina Hendricks")
+    assert name_confidence("Chris", "Chris Rock") >= name_confidence("Chris", "Christian Bale")
+    assert name_confidence("Will", "Will Smith") >= name_confidence("Will", "Wille Lindberg")
+    assert name_confidence("Will", "Will Smith") >= name_confidence("Will", "Bruce Willis")
+    assert name_confidence("Will", "Will Smith") >= name_confidence("Will", "Willem Dafoe")
+    assert name_confidence("Chris", "Chris Rock") >= default_settings.person_theta
+    assert name_confidence("Will", "Will Smith") >= default_settings.person_theta
 
 
 def test_aliases_are_names_never_ids() -> None:
@@ -269,6 +292,8 @@ async def test_es_searcher_uses_people_alias_and_people_name_body() -> None:
     assert call["query"] == expected["query"]
     assert call["sort"] == expected["sort"]
     assert call["size"] == expected["size"]
+    expected_timeout = default_settings.elasticsearch_timeout_ms / 1000.0
+    assert call["request_timeout"] == pytest.approx(expected_timeout)
 
 
 def test_people_py_does_not_construct_person_ids() -> None:
@@ -478,6 +503,7 @@ async def test_searcher_failure_degrades_to_era_fallback() -> None:
     assert constraints.people_include == ()
     assert constraints.year_min == 1990
     assert out["person_ambiguous"] is False
+    assert out["degraded_reason"] is DegradedReason.RETRIEVAL_UNAVAILABLE
 
 
 async def test_missing_searcher_degrades_never_raises() -> None:
@@ -491,24 +517,99 @@ async def test_missing_searcher_degrades_never_raises() -> None:
 async def test_theta_from_settings() -> None:
     close = _person("p_ann", "Ann Close", popularity=1.0)
     index = MemoryPeopleIndex([close])
-    # "Ann" is a first-name-only match (0.58). Default theta 0.75 → zero.
+    # Exact given-name is 0.99. Default theta 0.75 → unique hit includes.
+    # theta=1.0 sits above that score → zero. Settings still gate the decision.
     state = empty_turn_state(_ctx(), person_mentions=("Ann",))
-    out_low = await resolve_people(
+    out_default = await resolve_people(
         state,
         searcher=index,
         aliases=AliasBook(mapping={}),
         settings=default_settings,
     )
-    constraints_low = out_low["constraints"]
-    assert isinstance(constraints_low, ConstraintState)
-    assert constraints_low.people_include == ()
-    high = default_settings.model_copy(update={"person_theta": 0.50})
-    out_high = await resolve_people(
-        state, searcher=index, aliases=AliasBook(mapping={}), settings=high
+    constraints_default = out_default["constraints"]
+    assert isinstance(constraints_default, ConstraintState)
+    assert constraints_default.people_include == ("p_ann",)
+    closed = default_settings.model_copy(update={"person_theta": 1.0})
+    out_closed = await resolve_people(
+        state, searcher=index, aliases=AliasBook(mapping={}), settings=closed
     )
-    constraints_high = out_high["constraints"]
-    assert isinstance(constraints_high, ConstraintState)
-    assert constraints_high.people_include == ("p_ann",)
+    constraints_closed = out_closed["constraints"]
+    assert isinstance(constraints_closed, ConstraintState)
+    assert constraints_closed.people_include == ()
+
+
+def _assert_clarifies_with_exact(out: Mapping[str, object], exact_name: str) -> None:
+    constraints = out["constraints"]
+    assert isinstance(constraints, ConstraintState)
+    assert constraints.people_include == ()
+    assert out["person_ambiguous"] is True
+    assert out["min_picks"] == 0
+    assert out["picks"] == ()
+    assert out["route"] is Route.CLARIFY
+    candidates = out["people_candidates"]
+    assert isinstance(candidates, tuple)
+    assert 2 <= len(candidates) <= 3
+    names = [person.name for person in candidates]
+    assert exact_name in names
+
+
+async def test_chris_exact_first_name_appears_in_clarify() -> None:
+    index = MemoryPeopleIndex(
+        [
+            _person("p_hendricks", "Christina Hendricks", popularity=5.0),
+            _person("p_bale", "Christian Bale", popularity=8.0),
+            _person("p_ricci", "Christina Ricci", popularity=4.0),
+            _person("p_rock", "Chris Rock", popularity=9.0),
+        ]
+    )
+    out = await resolve_people(
+        empty_turn_state(_ctx(), person_mentions=("Chris",)),
+        searcher=index,
+        aliases=AliasBook(mapping={}),
+    )
+    _assert_clarifies_with_exact(out, "Chris Rock")
+
+
+async def test_will_exact_first_name_appears_in_clarify() -> None:
+    index = MemoryPeopleIndex(
+        [
+            _person("p_wille", "Wille Lindberg", popularity=3.0),
+            _person("p_willis", "Bruce Willis", popularity=8.0),
+            _person("p_willem", "Willem Dafoe", popularity=7.0),
+            _person("p_will", "Will Smith", popularity=9.0),
+        ]
+    )
+    out = await resolve_people(
+        empty_turn_state(_ctx(), person_mentions=("Will",)),
+        searcher=index,
+        aliases=AliasBook(mapping={}),
+    )
+    _assert_clarifies_with_exact(out, "Will Smith")
+
+
+async def test_es_searcher_timeout_is_bounded_not_client_default() -> None:
+    searcher = EsPeopleSearcher(SlowEs(), timeout_ms=50)
+    t0 = time.perf_counter()
+    with pytest.raises(TimeoutError):
+        await searcher.search("Chris")
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 2.0
+
+
+async def test_slow_search_sets_retrieval_unavailable_within_timeout() -> None:
+    soft = PersonSoft(role="actor", era_year_min=1990, era_year_max=1999)
+    state = empty_turn_state(_ctx(), person_mentions=("Chris",), person_soft=soft)
+    searcher = EsPeopleSearcher(SlowEs(), timeout_ms=50)
+    t0 = time.perf_counter()
+    out = await resolve_people(state, searcher=searcher, aliases=AliasBook(mapping={}))
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 2.0
+    constraints = out["constraints"]
+    assert isinstance(constraints, ConstraintState)
+    assert constraints.people_include == ()
+    assert constraints.year_min == 1990
+    assert out["degraded_reason"] is DegradedReason.RETRIEVAL_UNAVAILABLE
+    assert out["person_ambiguous"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -599,3 +700,25 @@ async def test_live_ids_come_from_people_alias(live_searcher: EsPeopleSearcher) 
     assert any(
         person.person_id == person_id and person.name == "Adam Sandler" for person in confirmed
     )
+
+
+async def test_live_chris_clarify_includes_exact_first_name(
+    live_searcher: EsPeopleSearcher,
+) -> None:
+    out = await resolve_people(
+        empty_turn_state(_ctx(), person_mentions=("Chris",)),
+        searcher=live_searcher,
+        aliases=AliasBook(mapping={}),
+    )
+    _assert_clarifies_with_exact(out, "Chris Rock")
+
+
+async def test_live_will_clarify_includes_exact_first_name(
+    live_searcher: EsPeopleSearcher,
+) -> None:
+    out = await resolve_people(
+        empty_turn_state(_ctx(), person_mentions=("Will",)),
+        searcher=live_searcher,
+        aliases=AliasBook(mapping={}),
+    )
+    _assert_clarifies_with_exact(out, "Will Smith")
