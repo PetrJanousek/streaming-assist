@@ -351,7 +351,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T16 — Merge node
+### [x] T16 — Merge node
 **Deps:** T02, T09 · **Branch:** `task/T16-merge`
 
 **Owns:** `src/assist/nodes/merge.py`, `tests/test_merge_node.py`
