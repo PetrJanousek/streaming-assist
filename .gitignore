@@ -9,12 +9,24 @@ wheels/
 # Virtual environments
 .venv
 
-# project
+# Secrets and local env (keep .env.example)
 .env
+
+# Data that is fetched or generated, not committed
 data/raw/
 data/enriched/*.jsonl.tmp
 docs/eval-report.md
 *.log
+
+# Tool caches
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

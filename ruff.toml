@@ -1,0 +1,13 @@
+target-version = "py312"
+line-length = 100
+src = ["src"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+
+[lint.isort]
+known-first-party = ["assist"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

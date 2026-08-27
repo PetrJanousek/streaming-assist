@@ -155,7 +155,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T01 — Project scaffold
+### [x] T01 — Project scaffold
 **Deps:** none · **Branch:** `task/T01-scaffold`
 
 **Owns:** `pyproject.toml`, `Makefile`, `.env.example`, `.gitignore`, `ruff.toml`, `mypy.ini`, `src/assist/__init__.py`, `src/assist/config.py`, `src/assist/obs/logging.py`, `tests/conftest.py`
