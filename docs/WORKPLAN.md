@@ -256,7 +256,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T08 — LLM gateway
+### [x] T08 — LLM gateway
 **Deps:** T01, T02 · **Branch:** `task/T08-llm-gateway`
 
 **Owns:** `src/assist/llm/gateway.py`, `cost.py`, `llm/prompts/*`, `tests/test_gateway.py`
