@@ -314,7 +314,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T13 — API surface + middleware
+### [x] T13 — API surface + middleware
 **Deps:** T05, T09 · **Branch:** `task/T13-api`
 
 **Owns:** `src/assist/main.py`, `src/assist/api/*`, `tests/test_api.py`, `tests/test_authz_invariants.py`
