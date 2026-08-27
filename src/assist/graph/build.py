@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
@@ -40,10 +41,9 @@ async def passthrough(_state: TurnState) -> dict[str, object]:
     return {}
 
 
-async def retrieve(state: TurnState) -> dict[str, object]:
-    """Stub retrieve. Increments the cycle counter; later tasks fill candidates."""
-    attempts = int(state.get("retrieve_attempts") or 0)
-    return {"retrieve_attempts": attempts + 1}
+async def retrieve(_state: TurnState) -> dict[str, object]:
+    """Stub retrieve. The graph wrapper owns `retrieve_attempts`; T17 fills hits."""
+    return {}
 
 
 def _repo_root() -> Path:
@@ -62,14 +62,14 @@ def _adjacency(compiled: CompiledStateGraph[Any, Any, Any, Any]) -> dict[str, li
 
 
 def _simple_cycles(adj: Mapping[str, list[str]]) -> list[tuple[str, ...]]:
-    """Directed simple cycles. Each cycle is reported once, from its min node."""
+    """Directed simple cycles, including self-loops. Each cycle from its min node."""
     found: list[tuple[str, ...]] = []
     for start in sorted(adj):
         stack: list[tuple[str, list[str], set[str]]] = [(start, [start], {start})]
         while stack:
             current, path, seen = stack.pop()
             for nxt in adj.get(current, ()):
-                if nxt == start and len(path) >= 2:
+                if nxt == start:
                     found.append(tuple(path))
                 elif nxt not in seen and nxt > start:
                     stack.append((nxt, [*path, nxt], seen | {nxt}))
@@ -97,20 +97,68 @@ def _assert_workflow_invariants(compiled: CompiledStateGraph[Any, Any, Any, Any]
         raise RuntimeError(msg)
 
 
+def _as_update(raw: object) -> dict[str, object]:
+    if raw is None:
+        return {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    msg = f"graph node must return a mapping, got {type(raw)!r}"
+    raise TypeError(msg)
+
+
+def _wrap_node(name: str, fn: Any) -> Any:
+    """Own the retrieve cap in the graph. A node cannot skip, reset, or raise it.
+
+    `retrieve_attempts` increments on every retrieve visit, ignoring the node's
+    update. `retrieve_max_attempts` is stripped from every node's update so only
+    the turn's initial state (and settings) can set the cap. T17/T24 must keep
+    registering nodes through `_add_node` — a raw `graph.add_node` drops this.
+    """
+
+    async def wrapped(state: TurnState) -> dict[str, object]:
+        raw = fn(state)
+        if inspect.isawaitable(raw):
+            raw = await raw
+        result = _as_update(raw)
+        result.pop("retrieve_max_attempts", None)
+        if name == "retrieve":
+            attempts = int(state.get("retrieve_attempts") or 0)
+            result["retrieve_attempts"] = attempts + 1
+        else:
+            result.pop("retrieve_attempts", None)
+        return result
+
+    wrapped_fn: Any = wrapped
+    wrapped_fn.__name__ = getattr(fn, "__name__", name)
+    wrapped_fn.__qualname__ = getattr(fn, "__qualname__", wrapped.__name__)
+    wrapped_fn.__doc__ = getattr(fn, "__doc__", None)
+    # inspect.unwrap; call-time tool checks need the impl, not this wrapper.
+    wrapped_fn.__wrapped__ = fn
+    return wrapped_fn
+
+
 def _add_node(graph: StateGraph[TurnState], name: str, fn: Any) -> None:
     """LangGraph `_Node` overloads are sync; mypy rejects `async def` against TurnState.
 
     `fn` is Any for that seam only. Runtime still registers the async callable.
     """
-    graph.add_node(name, fn)
+    graph.add_node(name, _wrap_node(name, fn))
 
 
-def build_graph() -> CompiledStateGraph[TurnState, None, TurnState, TurnState]:
+def build_graph(
+    *,
+    node_overrides: Mapping[str, Any] | None = None,
+) -> CompiledStateGraph[TurnState, None, TurnState, TurnState]:
     graph: StateGraph[TurnState] = StateGraph(TurnState)
+    overrides = dict(node_overrides or {})
 
     for name in _PASSTHROUGH_NODES:
-        _add_node(graph, name, passthrough)
-    _add_node(graph, "retrieve", retrieve)
+        _add_node(graph, name, overrides.pop(name, passthrough))
+    _add_node(graph, "retrieve", overrides.pop("retrieve", retrieve))
+    if overrides:
+        unknown = ", ".join(sorted(overrides))
+        msg = f"unknown node overrides: {unknown}"
+        raise ValueError(msg)
 
     graph.add_edge(START, "load_session")
     graph.add_edge("load_session", "guard")
