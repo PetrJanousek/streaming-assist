@@ -48,7 +48,7 @@ All three must be clean. A red suite is not a mergeable PR.
 
 Tick your task's checkbox in this file (§5) **inside the same PR**. That one-line edit is the only shared-file write, and conflicts on it resolve trivially.
 
-**Mode L — local (current default, no remote configured):**
+**Mode L — local fallback (only if `git remote -v` is empty):**
 
 ```bash
 git add -A && git commit -m "T04: postgres schema, migrations and repositories"
@@ -62,7 +62,7 @@ EOF
 git worktree remove ../wt-T04 && git branch -d task/T04-postgres
 ```
 
-**Mode G — GitHub (use this instead once `git remote -v` shows an origin):**
+**Mode G — GitHub (THE DEFAULT — `origin` is `PetrJanousek/streaming-assist`, private):**
 
 ```bash
 git push -u origin task/T04-postgres
@@ -70,7 +70,12 @@ gh pr create --title "T04: postgres schema, migrations and repositories" --body 
 gh pr merge --squash --delete-branch
 ```
 
-Check `git remote -v` before shipping and use whichever mode applies. Do not add a remote yourself.
+PR body must contain: what changed (3-6 bullets), each acceptance criterion with the actual
+command output that proves it, and anything deliberately left out. Squash-merge keeps `main`
+one commit per task.
+
+Do not merge a PR whose `make lint typecheck test` output is not in the body. Do not add or
+change remotes.
 
 ### 2.5 Report
 
