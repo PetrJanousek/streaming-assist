@@ -91,6 +91,8 @@ class Settings(BaseSettings):
     enrich_concurrency: int = Field(default=8, ge=1)
     enrich_tokens_in: int = Field(default=350, ge=1)
     enrich_tokens_out: int = Field(default=180, ge=1)
+    # T12 index job. Embedder MAX_TEXTS is 256; stay at or below that.
+    index_batch_size: int = Field(default=64, ge=1, le=256)
 
     @field_validator("llm_provider", mode="before")
     @classmethod
