@@ -173,7 +173,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T02 — Domain layer
+### [x] T02 — Domain layer
 **Deps:** T01 · **Branch:** `task/T02-domain`
 
 **Owns:** `src/assist/domain/*`, `tests/test_merge_algebra.py`, `tests/test_sanitize_picks.py`
