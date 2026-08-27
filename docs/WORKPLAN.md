@@ -245,7 +245,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T07 — Embedder service
+### [x] T07 — Embedder service
 **Deps:** T01 · **Branch:** `task/T07-embedder`
 
 **Owns:** `services/embedder/*` (including its `Dockerfile`), `src/assist/stores/embed_client.py`, `tests/test_embed_client.py`
