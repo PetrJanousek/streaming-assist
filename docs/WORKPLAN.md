@@ -340,7 +340,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T15 — Intent node
+### [x] T15 — Intent node
 **Deps:** T05, T08, T09 · **Branch:** `task/T15-intent`
 
 **Owns:** `src/assist/nodes/intent.py`, `llm/prompts/intent.md`, `tests/test_intent.py`
