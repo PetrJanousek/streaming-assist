@@ -6,6 +6,7 @@ soft mention into an id, and every id must already exist in `people`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -33,6 +34,12 @@ SEARCH_SIZE = 15
 # 1-char tokens are not indexed (edge-ngram min_gram=2). AND-matching them
 # drops real hits such as "Samuel L. Jackson".
 _MIN_TOKEN_LEN = 2
+# Prefix of a longer token scores 0.65 + 0.35 * (q_len/n_len), which for
+# "chris"/"christina" is ~0.84, above person_theta. An exact given-name
+# token must not rank below that, or the clarify list omits Chris Rock.
+# Stay under the 0.999 full-name gate so "Chris" still clarifies.
+_EXACT_FIRST_NAME = 0.99
+_EXACT_LAST_NAME = 0.86
 _OUTCOME = Literal["single", "ambiguous", "zero"]
 
 _HINT_STOP = frozenset(
@@ -188,9 +195,9 @@ def name_confidence(query: str, name: str) -> float:
     n_set = set(n_tokens)
     if all(tok in n_set for tok in q_tokens):
         if len(q_tokens) == 1 and q_tokens[0] == n_tokens[-1]:
-            return 0.86
+            return _EXACT_LAST_NAME
         if len(q_tokens) == 1 and q_tokens[0] == n_tokens[0]:
-            return 0.58
+            return _EXACT_FIRST_NAME
         return 0.90
     used = [False] * len(n_tokens)
     scores: list[float] = []
@@ -254,10 +261,18 @@ def person_from_source(src: Mapping[str, object]) -> Person | None:
 class EsPeopleSearcher:
     """Query the `people` alias through T06's `people_name_body`."""
 
-    def __init__(self, client: Any, *, index: str = PEOPLE_ALIAS) -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        index: str = PEOPLE_ALIAS,
+        timeout_ms: int | None = None,
+    ) -> None:
         # Any: AsyncElasticsearch.search is a 50-kwarg overload; tests inject a double.
         self._client = client
         self._index = index
+        ms = timeout_ms if timeout_ms is not None else default_settings.elasticsearch_timeout_ms
+        self._timeout_s = ms / 1000.0
 
     async def search(
         self,
@@ -275,13 +290,21 @@ class EsPeopleSearcher:
             active_year_min=year_min,
             active_year_max=year_max,
         )
-        resp = await self._client.search(
-            index=self._index,
-            query=body["query"],
-            size=body["size"],
-            sort=body["sort"],
-            track_scores=True,
-        )
+        search_kw: dict[str, Any] = {
+            "index": self._index,
+            "query": body["query"],
+            "size": body["size"],
+            "sort": body["sort"],
+            "track_scores": True,
+        }
+        timeout_s = self._timeout_s
+        async with asyncio.timeout(timeout_s):
+            options = getattr(self._client, "options", None)
+            if callable(options):
+                # Per-request timeout; do not inherit the T06 client's 3 retries.
+                resp = await options(request_timeout=timeout_s, max_retries=0).search(**search_kw)
+            else:
+                resp = await self._client.search(**search_kw, request_timeout=timeout_s)
         payload = getattr(resp, "body", resp)
         if not isinstance(payload, Mapping):
             return ()
@@ -552,7 +575,14 @@ async def resolve_people(
         )
     except Exception:
         log.exception("people_search_failed")
-        return _zero_update(state, constraints, soft, t0, reason="search_failed")
+        return _zero_update(
+            state,
+            constraints,
+            soft,
+            t0,
+            reason="search_failed",
+            degraded_reason=DegradedReason.RETRIEVAL_UNAVAILABLE,
+        )
 
     index_ids = {person.person_id for person in hits}
 
@@ -611,9 +641,10 @@ def _zero_update(
     t0: float,
     *,
     reason: str,
+    degraded_reason: DegradedReason | None = None,
 ) -> dict[str, object]:
     log.info("people_zero", reason=reason)
-    return {
+    update: dict[str, object] = {
         "constraints": _era_fallback(constraints, soft),
         "person_ambiguous": False,
         "people_candidates": (),
@@ -622,6 +653,9 @@ def _zero_update(
         "chip_speech_acts": (SpeechAct.PERSON_DISAMBIGUATE,),
         "timings": _timings(state, t0),
     }
+    if degraded_reason is not None:
+        update["degraded_reason"] = degraded_reason
+    return update
 
 
 def make_people_node(
