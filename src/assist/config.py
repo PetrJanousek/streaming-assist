@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     elasticsearch_url: str = "http://localhost:9200"
     embedder_url: str = "http://localhost:8080"
+    embedder_timeout_ms: int = Field(default=5000, gt=0)
+    embedder_retries: int = Field(default=2, ge=0)
 
     @field_validator("llm_provider", mode="before")
     @classmethod
