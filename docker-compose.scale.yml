@@ -1,0 +1,18 @@
+# Step-2 overlay: put nginx in front of N api replicas.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml \
+#     --profile scale up --scale api=3
+#
+# The gateway service itself lives in docker-compose.yml under
+# profiles: [scale] so `docker compose --profile scale up` also works
+# without this file (api:8000 stays published). This overlay hides the
+# api port so the host only sees nginx.
+#
+# T27 owns docker/nginx/* and will bind-mount a real config; the inline
+# config on the gateway service is the T03 stand-in.
+
+services:
+  api:
+    ports: !reset []
+    expose:
+      - "8000"
