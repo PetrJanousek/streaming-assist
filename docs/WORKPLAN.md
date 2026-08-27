@@ -192,7 +192,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T03 — Docker + compose stack
+### [x] T03 — Docker + compose stack
 **Deps:** T01 · **Branch:** `task/T03-docker`
 
 **Owns:** `docker-compose.yml`, `docker-compose.scale.yml`, `docker/api.Dockerfile`, `docker/jobs.Dockerfile`, `.dockerignore`, Makefile docker targets

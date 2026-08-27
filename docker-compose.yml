@@ -1,0 +1,209 @@
+name: streaming-assist
+
+# Profiles:
+#   default  — api, postgres, elasticsearch, redis, embedder
+#   tools    — jobs (run-once CLI; never part of `up`)
+#   scale    — gateway (nginx in front of N api replicas)
+#
+# embedder builds from services/embedder/Dockerfile (T07). Until that
+# lands, `docker compose up -d` fails to build embedder; start the data
+# stores with `docker compose up -d postgres elasticsearch redis`.
+# api's image builds now; uvicorn fails until T13 adds assist.main.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: assist
+      POSTGRES_PASSWORD: assist
+      POSTGRES_DB: assist
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assist -d assist"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  elasticsearch:
+    image: elasticsearch:8.15.5
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      # 512m heap is the laptop budget (plan §1 / §11). Disk watermark
+      # and ML/geoip are off so a small Docker-Desktop disk does not
+      # go red and the node never phones home.
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+      xpack.ml.enabled: "false"
+      ingest.geoip.downloader.enabled: "false"
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    mem_limit: 1g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      # 8.15 images ship curl; the TCP probe is the fallback if they do not.
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:9200 >/dev/null || bash -c 'echo > /dev/tcp/127.0.0.1/9200'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 45s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  embedder:
+    build:
+      context: ./services/embedder
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: streaming-assist-api:local
+    pull_policy: build
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://assist:assist@postgres:5432/assist
+      REDIS_URL: redis://redis:6379/0
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      EMBEDDER_URL: http://embedder:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  jobs:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: docker/jobs.Dockerfile
+    image: streaming-assist-jobs:local
+    pull_policy: build
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://assist:assist@postgres:5432/assist
+      REDIS_URL: redis://redis:6379/0
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      EMBEDDER_URL: http://embedder:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      embedder:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import assist"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # In front of N api replicas. Use:
+  #   docker compose --profile scale up --scale api=3
+  # The overlay (docker-compose.scale.yml) hides api:8000 on the host so
+  # traffic has to go through this gateway. nginx re-resolves `api` via
+  # Docker DNS so --scale actually round-robins.
+  gateway:
+    profiles: ["scale"]
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    configs:
+      - source: nginx_default
+        target: /etc/nginx/conf.d/default.conf
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 5s
+
+configs:
+  nginx_default:
+    content: |
+      server {
+          listen 80;
+          server_name _;
+          location / {
+              resolver 127.0.0.11 valid=10s ipv6=off;
+              set $$upstream http://api:8000;
+              proxy_pass $$upstream;
+              proxy_http_version 1.1;
+              proxy_set_header Host $$host;
+              proxy_set_header X-Request-Id $$http_x_request_id;
+              proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $$scheme;
+          }
+      }
+
+volumes:
+  pgdata:
+  esdata:
+  redisdata:
