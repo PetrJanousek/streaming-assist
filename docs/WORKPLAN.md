@@ -223,7 +223,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T05 — Redis: session, chips, caches, rate limiter
+### [x] T05 — Redis: session, chips, caches, rate limiter
 **Deps:** T01, T02 · **Branch:** `task/T05-redis`
 
 **Owns:** `src/assist/stores/session.py`, `cache.py`, `ratelimit.py`, `tests/test_session.py`, `tests/test_ratelimit.py`
