@@ -2,6 +2,9 @@
 
 Fails closed: any matcher error is a block, never a pass. T24 wires this into the
 graph in place of the passthrough stub; until then callers invoke `guard` directly.
+
+This is a first gate, not a complete defence. It blocks closed-class phrases and
+the encoding tricks it can unfold. Residual evasion is named at `_PATTERN_SPECS`.
 """
 
 from __future__ import annotations
@@ -51,6 +54,13 @@ _HOMOGLYPH_TABLE: Final[dict[int, int]] = str.maketrans(_HOMOGLYPH_FROM, _HOMOGL
 
 # Each pattern is a closed-class phrase. Bare tokens like "ignore", "free",
 # "xxx", "jailbreak", or "torrent" stay unblocked so catalog titles pass.
+#
+# Residual risk a regex pre-filter cannot cover without catalog false
+# positives: base64, leetspeak ("ign0re prev10us"), spaced letters
+# ("i g n o r e"), snake/camel forms (ignore_previous_instructions,
+# IgnorePreviousInstructions), dotted "i.g.n.o.r.e", and uncovered homoglyph
+# scripts (e.g. Armenian). The model prompt and output validation must cover
+# these. Do not add patterns that chase them.
 _PATTERN_SPECS: Final[tuple[tuple[str, str], ...]] = (
     (
         "injection",
@@ -99,8 +109,14 @@ _PATTERN_SPECS: Final[tuple[tuple[str, str], ...]] = (
     ("jailbreak", r"disable\s+(your\s+)?(safety|filters?|guards?)"),
     ("jailbreak", r"(roleplay|act)\s+as\s+(an?\s+)?(evil|unrestricted|uncensored)"),
     ("jailbreak", r"stay\s+in\s+character\s+as"),
-    ("jailbreak", r"forget\s+you\s+are"),
-    ("jailbreak", r"without\s+(any\s+)?(rules|restrictions|filters?)"),
+    # Identity wipe, not "forget you are in a bad mood".
+    (
+        "jailbreak",
+        r"forget\s+you\s+are\s+(an?\s+)?(streaming\s+)?"
+        r"(assistant|ai|model|llm|chatbot|gpt|system)",
+    ),
+    # Jailbreak "without restrictions/filters", not "without any rules, surprise me".
+    ("jailbreak", r"without\s+(any\s+)?(restrictions|filters?|guardrails?)"),
     ("adult", r"\bporn(ography|ographic|o)?\b"),
     ("adult", r"\bxxx\s+(movies?|films?|videos?|clips?|porn|content|streams?)"),
     ("adult", r"(uncensored|explicit|adult|nsfw|porn).{0,20}\bxxx\b"),
@@ -208,6 +224,10 @@ _ENCODED_EXTRA: Final[tuple[tuple[str, re.Pattern[str]], ...]] = _compile_patter
 )
 
 
+# Input that unfolds to less than 1/N of its non-space length is a hidden payload.
+_COLLAPSE_RATIO: Final[int] = 3
+
+
 def _has_disallowed_control(text: str) -> bool:
     for char in text:
         code = ord(char)
@@ -222,16 +242,67 @@ def _has_disallowed_control(text: str) -> bool:
     return False
 
 
+def _is_word_char(char: str) -> bool:
+    category = unicodedata.category(char)
+    return category.startswith("L") or category.startswith("N")
+
+
+def _is_hidden_format(char: str) -> bool:
+    code = ord(char)
+    return unicodedata.category(char) == "Cf" or code in _FORMAT_HIDE
+
+
+def _is_compatibility_letter_trick(char: str) -> bool:
+    """Fullwidth/circled letters NFKC-fold to ASCII; NBSP and accents do not."""
+    mapped = unicodedata.normalize("NFKC", char)
+    if mapped == char:
+        return False
+    if unicodedata.category(char).startswith("Z"):
+        return False
+    return any(_is_word_char(part) for part in mapped)
+
+
+def _format_hides_inside_word(text: str) -> bool:
+    """Format/hidden chars between two letters or digits are an evasion.
+
+    ZWJ between emoji is not: it builds one grapheme and is not an attack.
+    """
+    length = len(text)
+    index = 0
+    while index < length:
+        if not _is_hidden_format(text[index]):
+            index += 1
+            continue
+        left = index - 1
+        while left >= 0 and _is_hidden_format(text[left]):
+            left -= 1
+        right = index + 1
+        while right < length and _is_hidden_format(text[right]):
+            right += 1
+        if (
+            left >= 0
+            and right < length
+            and _is_word_char(text[left])
+            and _is_word_char(text[right])
+        ):
+            return True
+        index += 1
+    return False
+
+
 def _unfold(text: str) -> tuple[str, bool]:
     """Fold the query for phrase matching.
 
     Returns `(normalized, encoded_trick)`. `encoded_trick` is true when the
-    query used compatibility characters, hidden format chars, or homoglyphs —
-    not when it only changed case or used ordinary accents. ASCII `xXx` is
-    therefore not an encoding trick; fullwidth Latin `xxx` is.
+    query hid a token with compatibility letters, format chars inside a word,
+    or homoglyphs. It is false for ordinary unicode: NBSP, decomposed accents,
+    and emoji ZWJ sequences. ASCII `xXx` is not an encoding trick; fullwidth
+    Latin `xxx` is.
     """
+    encoded = _format_hides_inside_word(text) or any(
+        _is_compatibility_letter_trick(char) for char in text
+    )
     nfkc = unicodedata.normalize("NFKC", text)
-    encoded = nfkc != text
     nfd = unicodedata.normalize("NFD", nfkc)
     kept: list[str] = []
     for char in nfd:
@@ -240,7 +311,6 @@ def _unfold(text: str) -> tuple[str, bool]:
         if category == "Mn":
             continue
         if category == "Cf" or code in _FORMAT_HIDE:
-            encoded = True
             continue
         kept.append(char)
     folded = "".join(kept).casefold()
@@ -251,13 +321,36 @@ def _unfold(text: str) -> tuple[str, bool]:
     return normalized, encoded
 
 
+def _is_whitespace_only(text: str) -> bool:
+    return all(char.isspace() for char in text)
+
+
+def _collapsed_hidden_payload(raw: str, normalized: str) -> bool:
+    """Non-empty input that unfolds to empty or near-empty is a hidden payload.
+
+    Unicode tag letters (U+E0000-U+E007F) are Cf and strip to nothing. A
+    whitespace-only query is a real empty search and must not match this.
+    """
+    if _is_whitespace_only(raw):
+        return False
+    raw_core = "".join(char for char in raw if not char.isspace())
+    norm_core = "".join(char for char in normalized if not char.isspace())
+    if not norm_core:
+        return True
+    return len(norm_core) * _COLLAPSE_RATIO < len(raw_core)
+
+
 def inspect_text(text: str, *, max_chars: int) -> GuardVerdict:
     """Classify user text. Pure: no I/O, no model."""
     if _has_disallowed_control(text):
         return GuardVerdict(blocked=True, category="control")
+    if _is_whitespace_only(text):
+        return GuardVerdict(blocked=False)
     if len(text) > max_chars:
         return GuardVerdict(blocked=True, category="length")
     normalized, encoded = _unfold(text)
+    if _collapsed_hidden_payload(text, normalized):
+        return GuardVerdict(blocked=True, category="encoding")
     if not normalized:
         return GuardVerdict(blocked=False)
     for category, pattern in _PATTERNS:
