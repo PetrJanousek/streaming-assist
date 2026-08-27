@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     rank_w_pop: float = Field(default=0.50, ge=0.0, le=1.0)
     rank_w_constraint: float = Field(default=0.30, ge=0.0, le=1.0)
     rank_w_semantic: float = Field(default=0.20, ge=0.0, le=1.0)
+    person_theta: float = Field(default=0.75, ge=0.0, le=1.0)
 
     # Session / limits
     session_ttl_s: int = Field(default=86400, gt=0)
