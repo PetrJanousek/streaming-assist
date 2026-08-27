@@ -50,9 +50,16 @@ def after_merge(state: TurnState) -> AfterMerge:
 
 
 def after_retrieve(state: TurnState) -> AfterRetrieve:
-    """The one bounded cycle: retrieve → broaden → retrieve, then rank."""
+    """The one bounded cycle: retrieve → broaden → retrieve, then rank.
+
+    The cap is graph-owned. A node cannot raise it above `settings.retrieve_max_attempts`.
+    """
     attempts = int(state.get("retrieve_attempts") or 0)
-    cap = int(state.get("retrieve_max_attempts") or settings.retrieve_max_attempts)
+    configured = int(settings.retrieve_max_attempts)
+    requested = int(state.get("retrieve_max_attempts") or configured)
+    cap = min(requested, configured)
+    if cap < 1:
+        cap = configured
     candidates = state.get("candidates") or ()
     if not candidates and attempts < cap:
         return "broaden"
