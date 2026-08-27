@@ -8,6 +8,11 @@ from typing import Literal, Self
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_DEFAULT_DATASET_URL = (
+    "https://huggingface.co/datasets/hugginglearners/netflix-shows/resolve/main/netflix_titles.csv"
+)
+_DEFAULT_DATASET_SHA256 = "b5e2528aaac6a9a1544f68fb1ad004f46fabbf8bc2644d96f7364ca8b66ce959"
+
 
 class LLMProvider(StrEnum):
     ANTHROPIC = "anthropic"
@@ -33,6 +38,9 @@ class Settings(BaseSettings):
 
     # Catalog / retrieval
     home_country: str = "United States"
+    dataset_url: str = _DEFAULT_DATASET_URL
+    dataset_sha256: str = _DEFAULT_DATASET_SHA256
+    dataset_fetch_timeout_s: int = Field(default=60, gt=0)
     embed_model: str = "BAAI/bge-small-en-v1.5"
     rrf_k: int = Field(default=60, ge=1)
     router_theta1: float = Field(default=0.55, ge=0.0, le=1.0)

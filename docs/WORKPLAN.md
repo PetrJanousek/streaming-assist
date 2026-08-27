@@ -281,7 +281,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T10 — Data job: fetch + normalize
+### [x] T10 — Data job: fetch + normalize
 **Deps:** T02, T04 · **Branch:** `task/T10-data-job`
 
 **Owns:** `src/assist/jobs/cli.py`, `fetch.py`, `normalize.py`, `data/taxonomy/*`, `tests/test_normalize.py`
