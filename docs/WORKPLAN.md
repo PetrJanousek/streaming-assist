@@ -417,7 +417,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T22 — Router edge + template reply
+### [x] T22 — Router edge + template reply
 **Deps:** T19, T20, T21 · **Branch:** `task/T22-router-template`
 
 **Owns:** `src/assist/graph/edges.py` (route predicate), `src/assist/nodes/templates.py`, `data/phrases/*`, `tests/test_router.py`

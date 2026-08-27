@@ -1,0 +1,178 @@
+{
+  "phrases": [
+    {
+      "id": "chip.refine_mood",
+      "speech_act": "refine_mood",
+      "kind": "chip",
+      "template": "Something funnier"
+    },
+    {
+      "id": "chip.refine_genre",
+      "speech_act": "refine_genre",
+      "kind": "chip",
+      "template": "More comedy"
+    },
+    {
+      "id": "chip.refine_duration",
+      "speech_act": "refine_duration",
+      "kind": "chip",
+      "template": "Under 90 minutes"
+    },
+    {
+      "id": "chip.refine_origin",
+      "speech_act": "refine_origin",
+      "kind": "chip",
+      "template": "From home country"
+    },
+    {
+      "id": "chip.toggle_local_originals",
+      "speech_act": "toggle_local_originals",
+      "kind": "chip",
+      "template": "Local originals"
+    },
+    {
+      "id": "chip.person_disambiguate",
+      "speech_act": "person_disambiguate",
+      "kind": "chip",
+      "template": "Name the person"
+    },
+    {
+      "id": "chip.more_like_pick",
+      "speech_act": "more_like_pick",
+      "kind": "chip",
+      "template": "More like this"
+    },
+    {
+      "id": "chip.reset_soft",
+      "speech_act": "reset_soft",
+      "kind": "chip",
+      "template": "Start over"
+    },
+    {
+      "id": "chip.clarify_genre",
+      "speech_act": "clarify_genre",
+      "kind": "chip",
+      "template": "Comedy"
+    },
+    {
+      "id": "chip.clarify_media_type",
+      "speech_act": "clarify_media_type",
+      "kind": "chip",
+      "template": "Movies"
+    },
+    {
+      "id": "chip.safe_refuse_continue",
+      "speech_act": "safe_refuse_continue",
+      "kind": "chip",
+      "template": "Something else"
+    },
+    {
+      "id": "reply.generic",
+      "speech_act": "refine_genre",
+      "kind": "reply",
+      "template": "Here are a few titles that match."
+    },
+    {
+      "id": "reply.named",
+      "speech_act": "refine_genre",
+      "kind": "reply",
+      "template": "A solid match is {title}."
+    },
+    {
+      "id": "reply.mood",
+      "speech_act": "refine_mood",
+      "kind": "reply",
+      "template": "Here are some {mood} picks, starting with {title}."
+    },
+    {
+      "id": "reply.genre",
+      "speech_act": "refine_genre",
+      "kind": "reply",
+      "template": "Some {genre} titles, starting with {title}."
+    },
+    {
+      "id": "reply.decade",
+      "speech_act": "refine_genre",
+      "kind": "reply",
+      "template": "From that decade, try {title}."
+    },
+    {
+      "id": "reply.duration",
+      "speech_act": "refine_duration",
+      "kind": "reply",
+      "template": "Short enough for tonight — start with {title}."
+    },
+    {
+      "id": "reply.known_title",
+      "speech_act": "more_like_pick",
+      "kind": "reply",
+      "template": "{title} is in the catalog."
+    },
+    {
+      "id": "reply.chip",
+      "speech_act": "refine_genre",
+      "kind": "reply",
+      "template": "Updated your filters. Try {title}."
+    },
+    {
+      "id": "reply.origin",
+      "speech_act": "refine_origin",
+      "kind": "reply",
+      "template": "From that region, try {title}."
+    },
+    {
+      "id": "reply.local",
+      "speech_act": "toggle_local_originals",
+      "kind": "reply",
+      "template": "Sticking to local originals. Start with {title}."
+    },
+    {
+      "id": "reply.reset",
+      "speech_act": "reset_soft",
+      "kind": "reply",
+      "template": "Filters cleared. Popular titles start with {title}."
+    },
+    {
+      "id": "reply.more_like",
+      "speech_act": "more_like_pick",
+      "kind": "reply",
+      "template": "More in that vein, starting with {title}."
+    },
+    {
+      "id": "reply.clarify_person",
+      "speech_act": "person_disambiguate",
+      "kind": "reply",
+      "template": "I found more than one person. Tap a name to continue."
+    },
+    {
+      "id": "reply.clarify_genre",
+      "speech_act": "clarify_genre",
+      "kind": "reply",
+      "template": "Which genre do you want?"
+    },
+    {
+      "id": "reply.clarify_media",
+      "speech_act": "clarify_media_type",
+      "kind": "reply",
+      "template": "Movies or series?"
+    },
+    {
+      "id": "reply.refusal",
+      "speech_act": "safe_refuse_continue",
+      "kind": "reply",
+      "template": "I cannot help with that. Try a different search."
+    },
+    {
+      "id": "reply.empty",
+      "speech_act": "clarify_genre",
+      "kind": "reply",
+      "template": "I did not find a match. Try a broader genre or media type."
+    },
+    {
+      "id": "reply.degraded",
+      "speech_act": "refine_genre",
+      "kind": "reply",
+      "template": "I had a problem on this turn. Here are the best matches I still have."
+    }
+  ]
+}
