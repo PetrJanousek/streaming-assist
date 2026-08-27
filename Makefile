@@ -9,11 +9,8 @@ lint:
 typecheck:
 	uv run mypy src tests
 
-# pytest exits 5 when nothing is collected; T01 ships an empty suite on purpose
 test:
-	uv run pytest; \
-	ec=$$?; \
-	if [ $$ec -eq 0 ] || [ $$ec -eq 5 ]; then exit 0; else exit $$ec; fi
+	uv run pytest
 
 fmt:
 	uv run ruff format src tests
