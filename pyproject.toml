@@ -7,11 +7,38 @@ authors = [
     { name = "Petr Janousek", email = "petejanousek@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "alembic",
+    "asyncpg",
+    "elasticsearch[async]>=8.15,<9",
+    "fastapi",
+    "httpx",
+    "langchain",
+    "langchain-anthropic",
+    "langgraph",
+    "pydantic",
+    "pydantic-settings",
+    "redis",
+    "sqlalchemy[asyncio]",
+    "structlog",
+    "typer",
+    "uvicorn",
+]
 
-[project.scripts]
-assist = "assist:main"
+[dependency-groups]
+dev = [
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "testcontainers",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.3,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
