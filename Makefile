@@ -1,4 +1,4 @@
-.PHONY: lint typecheck test fmt up up-all down logs ps shell seed graph
+.PHONY: lint typecheck test fmt up up-all down logs ps shell seed graph eval
 
 COMPOSE ?= docker compose
 
@@ -45,3 +45,7 @@ seed:
 # Architecture diagram from the compiled graph, not a hand-drawn copy.
 graph:
 	uv run python -c "from assist.graph.build import export_mermaid; export_mermaid()"
+
+# Golden-set scorecard. Default is fixture mode (no live stores).
+eval:
+	uv run python -m assist.jobs.eval
