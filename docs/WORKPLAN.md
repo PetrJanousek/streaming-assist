@@ -450,7 +450,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T25 — SSE streaming + demo UI
+### [x] T25 — SSE streaming + demo UI
 **Deps:** T13, T24 · **Branch:** `task/T25-ui`
 
 **Owns:** `src/assist/api/routes_stream.py`, `web/*`, `tests/test_stream.py`

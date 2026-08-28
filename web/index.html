@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>streaming-assist</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="top">
+        <div class="brand">
+          <span class="mark">SA</span>
+          <div>
+            <p class="kicker">catalog assist</p>
+            <h1>Find something to watch</h1>
+          </div>
+        </div>
+        <label class="profile">
+          <span>Profile</span>
+          <select id="profile" aria-label="Dev profile"></select>
+        </label>
+      </header>
+
+      <section id="constraints" class="constraints" hidden>
+        <p class="kicker">Sticky constraints</p>
+        <div id="constraint-pills" class="pills"></div>
+      </section>
+
+      <ol id="stages" class="stages" aria-label="Turn progress">
+        <li data-stage="start">Listen</li>
+        <li data-stage="constraints">Constraints</li>
+        <li data-stage="candidates">Search</li>
+        <li data-stage="validated">Validate</li>
+        <li data-stage="picks">Picks</li>
+        <li data-stage="reply">Reply</li>
+      </ol>
+
+      <main id="transcript" class="transcript" aria-live="polite"></main>
+
+      <form id="composer" class="composer">
+        <label class="sr-only" for="message">Search</label>
+        <input
+          id="message"
+          name="message"
+          type="text"
+          maxlength="500"
+          autocomplete="off"
+          placeholder="A cozy comedy under two hours"
+          required
+        />
+        <button type="submit" id="send">Search</button>
+      </form>
+      <p id="status" class="status" role="status"></p>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
