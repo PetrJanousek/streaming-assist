@@ -461,7 +461,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T26 — Golden set + eval harness
+### [x] T26 — Golden set + eval harness
 **Deps:** T24 · **Branch:** `task/T26-eval`
 
 **Owns:** `src/assist/jobs/eval.py`, `data/golden/*`, `tests/test_eval.py`

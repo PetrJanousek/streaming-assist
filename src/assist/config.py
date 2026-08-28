@@ -99,6 +99,8 @@ class Settings(BaseSettings):
     retrieve_size: int = Field(default=25, ge=1, le=50)
     retrieve_each_k: int = Field(default=50, ge=1)
     retrieve_franchise_cap: int = Field(default=1, ge=1)
+    # T26: fixture eval session ids and seeded stage latency.
+    eval_seed: int = Field(default=26, ge=0)
 
     @field_validator("llm_provider", mode="before")
     @classmethod
