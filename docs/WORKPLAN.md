@@ -439,7 +439,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T24 — Full graph wiring + e2e
+### [x] T24 — Full graph wiring + e2e
 **Deps:** T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23 · **Branch:** `task/T24-wiring`
 
 **Owns:** `src/assist/graph/build.py` (real nodes replacing stubs), `tests/test_pipeline_e2e.py`
