@@ -472,7 +472,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T27 — Hardening, scale overlay, README
+### [x] T27 — Hardening, scale overlay, README
 **Deps:** T24 · **Branch:** `task/T27-hardening`
 
 **Owns:** `docker-compose.scale.yml`, `docker/nginx/*`, `README.md`, `docs/runbook.md`
