@@ -1,18 +1,37 @@
-# Step-2 overlay: put nginx in front of N api replicas.
+# Step-2 overlay: nginx in front of N api replicas.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.scale.yml \
 #     --profile scale up --scale api=3
 #
-# The gateway service itself lives in docker-compose.yml under
-# profiles: [scale] so `docker compose --profile scale up` also works
-# without this file (api:8000 stays published). This overlay hides the
-# api port so the host only sees nginx.
+# The base file publishes api:8000. This overlay hides that port so the
+# host only sees gateway:80, and bind-mounts docker/nginx/default.conf
+# over the T03 inline stand-in.
 #
-# T27 owns docker/nginx/* and will bind-mount a real config; the inline
-# config on the gateway service is the T03 stand-in.
+# Suggested Makefile target (T26 owns the Makefile this stage — not added):
+#
+#   scale:
+#   	$(COMPOSE) -f docker-compose.yml -f docker-compose.scale.yml \
+#   	  --profile scale up -d --wait --wait-timeout 180 --scale api=3
 
 services:
   api:
     ports: !reset []
     expose:
       - "8000"
+
+  gateway:
+    configs: !reset []
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    # / is 404 until T25's demo UI lands. /healthz is the API liveness probe
+    # and is always present, so the gateway becomes healthy without the UI.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 5s
