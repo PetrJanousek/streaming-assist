@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from assist.api.deps import AppResources, default_profile_catalog
 from assist.api.middleware import TraceTimingMiddleware, install_error_handlers
 from assist.api.routes_ops import router as ops_router
+from assist.api.routes_stream import install as install_stream
 from assist.api.routes_turn import router as turn_router
 from assist.config import settings
 from assist.graph.build import build_graph
@@ -61,6 +62,7 @@ def create_app(*, resources: AppResources | None = None) -> FastAPI:
     install_error_handlers(application)
     application.include_router(ops_router)
     application.include_router(turn_router)
+    install_stream(application)
     return application
 
 
