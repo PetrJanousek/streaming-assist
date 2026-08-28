@@ -428,7 +428,7 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [ ] T23 — Generative reply node
+### [x] T23 — Generative reply node
 **Deps:** T08, T22 · **Branch:** `task/T23-generative-reply`
 
 **Owns:** `src/assist/nodes/reply.py`, `llm/prompts/reply.md`, `tests/test_reply.py`
