@@ -483,7 +483,11 @@ def _text_from_input(value: Any) -> str:
     if isinstance(value, str):
         marker = "User message:"
         if marker in value:
-            return value.rsplit(marker, 1)[-1].strip()
+            # The user line is the first block after the marker. Anything after a
+            # blank line is prompt scaffolding (T28 appends a reinforcement note),
+            # so stop there rather than assuming {text} renders last.
+            tail = value.rsplit(marker, 1)[-1].strip()
+            return tail.split("\n\n", 1)[0].strip()
         return value.strip()
     return ""
 

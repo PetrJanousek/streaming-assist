@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     rank_w_pop: float = Field(default=0.50, ge=0.0, le=1.0)
     rank_w_constraint: float = Field(default=0.30, ge=0.0, le=1.0)
     rank_w_semantic: float = Field(default=0.20, ge=0.0, le=1.0)
+    # Additive recency hint. 0 keeps the pop/constraint/semantic mix unchanged.
+    rank_w_recency: float = Field(default=0.0, ge=0.0, le=1.0)
     person_theta: float = Field(default=0.75, ge=0.0, le=1.0)
 
     # Session / limits

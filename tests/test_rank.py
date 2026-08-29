@@ -23,6 +23,7 @@ from assist.domain.enums import (
     MediaType,
     MoodId,
     Package,
+    RecencyBias,
 )
 from assist.graph.build import build_graph
 from assist.graph.state import TurnState, empty_turn_state
@@ -36,6 +37,7 @@ from assist.nodes.rank import (
     min_max_norm,
     rank,
     rank_candidates,
+    recency_norms,
 )
 
 # Documented fixture (see test_documented_fixture_order).
@@ -111,6 +113,8 @@ def test_config_weights_sum_to_one() -> None:
     assert loaded.pop == settings.rank_w_pop
     assert loaded.constraint == settings.rank_w_constraint
     assert loaded.semantic == settings.rank_w_semantic
+    assert loaded.recency == 0.0
+    assert settings.rank_w_recency == 0.0
 
 
 def test_rank_w_pop_point_four_raises() -> None:
@@ -410,6 +414,74 @@ async def test_rank_as_graph_node_preserves_id_set() -> None:
     )
     assert _ids_from_state(result["candidates"]) == ["s-bravo", "s-alpha", "s-low"]
     assert result["top1"] == pytest.approx(0.85)
+
+
+def test_recency_bias_unset_emits_zero_norms() -> None:
+    features = [RankFeatures(release_year=2020), RankFeatures(release_year=1990)]
+    assert recency_norms(features, ConstraintState.empty()) == [0.0, 0.0]
+    assert recency_norms(features, ConstraintState(recency_bias=RecencyBias.ANY)) == [0.0, 0.0]
+
+
+def test_recency_bias_tonight_prefers_newer() -> None:
+    features = [
+        RankFeatures(release_year=1990),
+        RankFeatures(release_year=2020),
+        RankFeatures(release_year=None),
+    ]
+    norms = recency_norms(features, ConstraintState(recency_bias=RecencyBias.TONIGHT))
+    assert norms == pytest.approx([0.0, 1.0, 0.0])
+
+
+def test_recency_weight_zero_does_not_change_order() -> None:
+    candidates = [
+        _cand("s-old", "Old", year=1990, score=0.5),
+        _cand("s-new", "New", year=2020, score=0.5),
+    ]
+    features = {
+        "s-old": RankFeatures(pop_28d=10.0, semantic_score=0.5, release_year=1990),
+        "s-new": RankFeatures(pop_28d=10.0, semantic_score=0.5, release_year=2020),
+    }
+    mix = RankWeights(pop=0.50, constraint=0.30, semantic=0.20, recency=0.0)
+    ranked = rank_candidates(
+        candidates,
+        ConstraintState(recency_bias=RecencyBias.TONIGHT),
+        features=features,
+        weights=mix,
+    )
+    ranked_empty = rank_candidates(
+        candidates, ConstraintState.empty(), features=features, weights=mix
+    )
+    assert _ids(ranked) == _ids(ranked_empty)
+    assert ranked[0].score == pytest.approx(ranked_empty[0].score)
+
+
+def test_recency_weight_with_tonight_moves_newer_first() -> None:
+    candidates = [
+        _cand("s-old", "Old", year=1990, score=0.5),
+        _cand("s-new", "New", year=2020, score=0.5),
+    ]
+    features = {
+        "s-old": RankFeatures(pop_28d=10.0, semantic_score=0.5, release_year=1990),
+        "s-new": RankFeatures(pop_28d=10.0, semantic_score=0.5, release_year=2020),
+    }
+    mix = RankWeights(pop=0.50, constraint=0.30, semantic=0.20, recency=0.25)
+    without = rank_candidates(candidates, ConstraintState.empty(), features=features, weights=mix)
+    with_bias = rank_candidates(
+        candidates,
+        ConstraintState(recency_bias=RecencyBias.WEEKEND),
+        features=features,
+        weights=mix,
+    )
+    assert without[0].score == pytest.approx(without[1].score)
+    assert with_bias[0].catalog_id == "s-new"
+    assert with_bias[0].score > with_bias[1].score
+
+
+def test_constraint_match_ignores_recency_bias() -> None:
+    features = RankFeatures(media_type=MediaType.FILM, genres=(GenreId.DRAMA,), release_year=2015)
+    base = ConstraintState(genres_include=(GenreId.DRAMA,))
+    with_bias = ConstraintState(genres_include=(GenreId.DRAMA,), recency_bias=RecencyBias.TONIGHT)
+    assert constraint_match(features, base) == constraint_match(features, with_bias)
 
 
 def test_log_pop_matches_documented_fixture() -> None:

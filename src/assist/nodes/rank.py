@@ -16,7 +16,7 @@ from assist.config import Settings
 from assist.config import settings as default_settings
 from assist.domain.catalog import Candidate
 from assist.domain.constraints import ConstraintState
-from assist.domain.enums import GenreId, MediaType, MoodId
+from assist.domain.enums import GenreId, MediaType, MoodId, RecencyBias
 from assist.graph.state import TurnState
 from assist.nodes.retrieval import franchise_key
 from assist.obs.logging import get_logger
@@ -38,6 +38,7 @@ class RankWeights:
     pop: float
     constraint: float
     semantic: float
+    recency: float = 0.0
 
     @classmethod
     def from_settings(cls, cfg: Settings | None = None) -> RankWeights:
@@ -46,6 +47,7 @@ class RankWeights:
             pop=src.rank_w_pop,
             constraint=src.rank_w_constraint,
             semantic=src.rank_w_semantic,
+            recency=src.rank_w_recency,
         )
 
 
@@ -101,8 +103,8 @@ def constraint_match(features: RankFeatures, constraints: ConstraintState) -> fl
     """Fraction of active soft constraints this title satisfies.
 
     List includes use coverage (partial credit). Excludes are binary. A missing
-    feature scores 0 on that axis — we never invent a match. Constraints we
-    cannot evaluate (languages, recency_bias) are skipped, not failed.
+    feature scores 0 on that axis — we never invent a match. languages is skipped
+    (no catalog field). recency_bias is a separate rank signal, not a match axis.
     """
     parts: list[float] = []
 
@@ -152,9 +154,13 @@ def fused_score(
     constraint: float,
     semantic_norm: float,
     weights: RankWeights,
+    recency_norm: float = 0.0,
 ) -> float:
     return (
-        weights.pop * pop_norm + weights.constraint * constraint + weights.semantic * semantic_norm
+        weights.pop * pop_norm
+        + weights.constraint * constraint
+        + weights.semantic * semantic_norm
+        + weights.recency * recency_norm
     )
 
 
@@ -210,6 +216,7 @@ def rank_candidates(
     filled_pop = fill_cold_start([item.pop_28d for item in resolved])
     pop_norm = min_max_norm([log_pop(value) for value in filled_pop])
     matches = [constraint_match(item, constraints) for item in resolved]
+    recency_norm = recency_norms(resolved, constraints)
     if vector_path:
         raw_semantic = [
             item.semantic_score if item.semantic_score is not None else 0.0 for item in resolved
@@ -219,9 +226,15 @@ def rank_candidates(
         semantic_norm = [0.0] * len(resolved)
 
     scored: list[Candidate] = []
-    rows = zip(unique, pop_norm, matches, semantic_norm, strict=True)
-    for candidate, pop, match, semantic in rows:
-        score = fused_score(pop_norm=pop, constraint=match, semantic_norm=semantic, weights=mix)
+    rows = zip(unique, pop_norm, matches, semantic_norm, recency_norm, strict=True)
+    for candidate, pop, match, semantic, recency in rows:
+        score = fused_score(
+            pop_norm=pop,
+            constraint=match,
+            semantic_norm=semantic,
+            recency_norm=recency,
+            weights=mix,
+        )
         scored.append(candidate.model_copy(update={"score": score}))
 
     # catalog_id is a stable tiebreak. Builtin hash is randomised per process.
@@ -263,6 +276,7 @@ async def rank(
         w_pop=weights.pop,
         w_constraint=weights.constraint,
         w_semantic=weights.semantic,
+        w_recency=weights.recency,
     )
     return {"candidates": tuple(ranked), "top1": top1, "gap": gap}
 
@@ -344,6 +358,33 @@ def _origin_coverage(have: tuple[str, ...] | None, wanted: Sequence[str]) -> flo
         return 0.0
     present = {item.casefold() for item in have}
     return sum(1 for item in wanted if item.casefold() in present) / len(wanted)
+
+
+def recency_norms(
+    features_list: Sequence[RankFeatures], constraints: ConstraintState
+) -> list[float]:
+    """Newer release_year scores higher when recency_bias is tonight or weekend.
+
+    ANY and unset emit zeros so an unused hint cannot move the ranking.
+    Missing years score 0. A zero year-span is no signal.
+    """
+    n = len(features_list)
+    bias = constraints.recency_bias
+    if n == 0 or bias is None or bias is RecencyBias.ANY:
+        return [0.0] * n
+    years: list[float | None] = [
+        float(item.release_year) if item.release_year is not None else None
+        for item in features_list
+    ]
+    present = [year for year in years if year is not None]
+    if not present:
+        return [0.0] * n
+    lo = min(present)
+    hi = max(present)
+    span = hi - lo
+    if span == 0.0:
+        return [0.0] * n
+    return [0.0 if year is None else (year - lo) / span for year in years]
 
 
 def _year_in_window(year: int | None, year_min: int | None, year_max: int | None) -> float:
