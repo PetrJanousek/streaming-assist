@@ -483,19 +483,6 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
-### [x] T28 — Constraint coverage: intent prompt + recency rank
-**Deps:** T15, T19 · **Branch:** `task/T28-constraint-coverage`
-
-**Owns:** `src/assist/llm/prompts/intent.md`, `src/assist/nodes/rank.py` (append recency signal), `src/assist/config.py` (append `RANK_W_RECENCY`), `.env.example`, `tests/test_intent_prompt.py`, `tests/test_rank.py` (append)
-
-**Do:**
-- Prompt: document extractable constraint fields, FieldOp set/add vs clear, and the index origin vocabulary. Do not rewire ES filters. Do not emit `languages`.
-- Rank: `recency_bias` is a ranking hint behind `RANK_W_RECENCY` (default 0, no behaviour change).
-
-**Acceptance:** qwen3.5:4b before/after on six queries showing set-vs-clear; recency rank tests; `make lint typecheck test` clean.
-
----
-
 ## 6. File ownership map
 
 Two agents must never edit the same file concurrently. If your task needs a file it does not own, **report it instead of editing it**.
