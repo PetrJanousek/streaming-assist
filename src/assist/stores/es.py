@@ -284,6 +284,15 @@ def constraint_filters(
     return clauses
 
 
+def exclude_catalog_ids_filter(catalog_ids: Sequence[str]) -> QueryBody:
+    """`must_not` clause for MORE_RESULTS exclusion. `catalog_id` is a keyword field.
+
+    Caller-side: only append this when `catalog_ids` is non-empty -- an empty
+    `terms` clause is a valid no-op query but adds nothing worth sending.
+    """
+    return {"bool": {"must_not": [{"terms": {"catalog_id": list(catalog_ids)}}]}}
+
+
 def filters_from_constraints(
     state: ConstraintState,
     *,

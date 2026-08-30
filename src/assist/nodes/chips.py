@@ -26,6 +26,7 @@ from assist.domain.enums import (
     Route,
     SpeechAct,
 )
+from assist.domain.genre_frequency import GenreFrequencyTable, load_genre_frequency
 from assist.graph.state import ReplyChip, TurnState
 from assist.obs.logging import get_logger
 from assist.stores.session import ChipRecord, Session
@@ -137,6 +138,13 @@ def _builtin_phrases(*, home_country: str) -> dict[SpeechAct, ChipPhrase]:
             label="More like this",
             delta=ConstraintDelta(),
         ),
+        SpeechAct.MORE_RESULTS: ChipPhrase(
+            speech_act=SpeechAct.MORE_RESULTS,
+            label="Show me more",
+            # Empty delta by design: the tap advances past what has already
+            # been shown under the current filter, it does not change it.
+            delta=ConstraintDelta(),
+        ),
     }
 
 
@@ -177,6 +185,13 @@ def _constraints_of(state: TurnState) -> ConstraintState:
     return current if isinstance(current, ConstraintState) else ConstraintState.empty()
 
 
+def _seen_catalog_ids_of(state: TurnState) -> tuple[str, ...]:
+    raw = state.get("seen_catalog_ids") or ()
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(item for item in raw if isinstance(item, str) and item)
+
+
 def _toggle_local(constraints: ConstraintState, base: ChipPhrase) -> ChipPhrase:
     if constraints.local_originals_only:
         return ChipPhrase(
@@ -205,24 +220,40 @@ def _pool_genre_phrases(
     constraints: ConstraintState,
     candidates: Sequence[Candidate],
     limit: int,
+    frequency: GenreFrequencyTable,
 ) -> tuple[ChipPhrase, ...]:
-    """Refine-genre chips drawn from the retrieved pool, most common first.
+    """Refine-genre chips drawn from the retrieved pool, ranked by lift.
 
     genres_include is ANDed clause-per-genre in ES, so a genre the pool does not
     contain narrows the result set to nothing. Counting the candidates the user
-    is already looking at is what keeps every chip non-empty when tapped.
+    is already looking at is what keeps every chip non-empty when tapped --
+    lift only changes the order those pool genres are offered in.
+
+    Raw pool frequency ranks whatever genre is globally common (romance,
+    drama), not what is distinctive to this pool -- `horror movies from 90s`
+    minting "More romance" was exactly that bug. Lift corrects for it:
+    lift(genre) = pool_share(genre) / catalog_share(genre), demoting genres
+    that are common everywhere and promoting ones distinctive to this pool.
     """
     if limit <= 0:
         return ()
     already = set(constraints.genres_include) | set(constraints.genres_exclude)
     counts: dict[GenreId, int] = {}
+    pool_size = 0
     for candidate in candidates:
+        pool_size += 1
         for genre in candidate.genres:
             if genre in already:
                 continue
             counts[genre] = counts.get(genre, 0) + 1
+    if pool_size == 0:
+        return ()
+
+    def lift(genre: GenreId, count: int) -> float:
+        return (count / pool_size) / frequency.share(genre)
+
     # Ties break on the genre id so the same pool always mints the same chips.
-    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].value))
+    ranked = sorted(counts.items(), key=lambda kv: (-lift(kv[0], kv[1]), kv[0].value))
     return tuple(
         ChipPhrase(
             speech_act=base.speech_act,
@@ -273,6 +304,8 @@ def mint_one(
     picks: Sequence[Pick] = (),
     candidates: Sequence[Candidate] = (),
     max_chips: int = MAX_CHIPS_PER_TURN,
+    genre_frequency: GenreFrequencyTable | None = None,
+    seen_catalog_ids: Sequence[str] = (),
 ) -> tuple[Session, tuple[ReplyChip, ...]]:
     """Mint ReplyChips for one speech act onto `session` via `Session.mint_chip`.
 
@@ -309,13 +342,25 @@ def mint_one(
     if act is SpeechAct.REFINE_GENRE:
         # No pool signal means no honest refinement to offer, so mint nothing
         # rather than fall back to a fixed genre the results may not contain.
-        options = _pool_genre_phrases(phrase, current, candidates, max_chips)
+        freq = genre_frequency if genre_frequency is not None else GenreFrequencyTable.uniform()
+        options = _pool_genre_phrases(phrase, current, candidates, max_chips, freq)
         for bound in options:
             session, record = session.mint_chip(
                 label=bound.label, delta=bound.delta, speech_act=act
             )
             reply_chips.append(to_reply_chip(record))
         return session, tuple(reply_chips)
+
+    if act is SpeechAct.MORE_RESULTS:
+        # Mint only when the pool this turn actually holds something the user
+        # has not been shown -- this turn's own picks plus every catalog_id
+        # ever shown this session. A pool that is only the current picks
+        # (or only prior-turn titles) would tap into an immediate dead end.
+        shown = {p.catalog_id for p in picks} | set(seen_catalog_ids)
+        if not any(c.catalog_id not in shown for c in candidates):
+            return session, ()
+        session, record = session.mint_chip(label=phrase.label, delta=phrase.delta, speech_act=act)
+        return session, (to_reply_chip(record),)
 
     if act is SpeechAct.REFINE_MOOD:
         # Candidate carries no moods, so a mood chip cannot be grounded in the
@@ -334,11 +379,13 @@ async def mint_chips(
     sessions: SessionStore | None = None,
     phrases: ChipPhraseSource | None = None,
     settings: Settings | None = None,
+    genre_frequency: GenreFrequencyTable | None = None,
 ) -> dict[str, object]:
     """LangGraph node. Writes `chips` as ReplyChip only. Saves session if given."""
     t0 = time.perf_counter()
     cfg = settings if settings is not None else default_settings
     bank = phrases if phrases is not None else BuiltinChipPhrases(home_country=cfg.home_country)
+    freq = genre_frequency if genre_frequency is not None else GenreFrequencyTable.uniform()
 
     sess = session
     ctx = state.get("ctx")
@@ -361,6 +408,7 @@ async def mint_chips(
     picks = _picks_of(state)
     candidates = _candidates_of(state)
     constraints = _constraints_of(state)
+    seen_catalog_ids = _seen_catalog_ids_of(state)
     minted: list[ReplyChip] = []
 
     for raw_act in _requested_acts(state):
@@ -375,12 +423,50 @@ async def mint_chips(
                 people=people,
                 picks=picks,
                 candidates=candidates,
+                seen_catalog_ids=seen_catalog_ids,
                 max_chips=MAX_CHIPS_PER_TURN - len(minted),
+                genre_frequency=freq,
             )
         except UnknownSpeechActError as exc:
             log.info("chip_refused", speech_act=exc.speech_act, reason="unknown")
             continue
         minted.extend(chips)
+
+    # Generative-route safety net (T36): the model is free to return no
+    # mintable acts at all (empty list, or acts that all refuse to mint --
+    # e.g. only REFINE_MOOD, which is always skipped). `_requested_acts`
+    # already supplies deliberate packs for safety/clarify/degraded-empty
+    # turns, so this only fires on the one path with no server-authored
+    # pack: a genuinely successful generative turn (route is GENERATIVE,
+    # degraded_reason is NONE) that still produced an empty chip row while
+    # picks exist. Exhaustion and template-route degrades set route to
+    # something other than GENERATIVE, so they never reach here.
+    if (
+        not minted
+        and picks
+        and state.get("route") is Route.GENERATIVE
+        and state.get("degraded_reason") is DegradedReason.NONE
+    ):
+        log.info("chip_fallback_pack_applied", n_picks=len(picks), n_candidates=len(candidates))
+        for fallback_act in (SpeechAct.MORE_RESULTS, SpeechAct.REFINE_GENRE):
+            if len(minted) >= MAX_CHIPS_PER_TURN:
+                break
+            try:
+                sess, fallback_chips = mint_one(
+                    sess,
+                    fallback_act,
+                    phrases=bank,
+                    constraints=constraints,
+                    people=people,
+                    picks=picks,
+                    candidates=candidates,
+                    seen_catalog_ids=seen_catalog_ids,
+                    max_chips=MAX_CHIPS_PER_TURN - len(minted),
+                    genre_frequency=freq,
+                )
+            except UnknownSpeechActError:
+                continue
+            minted.extend(fallback_chips)
 
     minted = minted[:MAX_CHIPS_PER_TURN]
     if sessions is not None:
@@ -399,10 +485,21 @@ def make_chips_node(
     sessions: SessionStore | None = None,
     phrases: ChipPhraseSource | None = None,
     settings: Settings | None = None,
+    genre_frequency: GenreFrequencyTable | None = None,
 ) -> Callable[[TurnState], Awaitable[dict[str, object]]]:
-    """Bind session + phrase bank for the graph. T24 wires the real stores."""
+    """Bind session + phrase bank + genre frequency table for the graph.
+
+    The frequency table is loaded once here, at construction, like the phrase
+    bank -- `mint_chips`/`mint_one` do no file I/O per call. A missing or
+    malformed `data/taxonomy/genre_frequency.json` falls back to a uniform
+    table (lift ranking degrades to the old raw-count ranking) with one
+    warning logged by `load_genre_frequency`, not a failure per turn.
+    """
+    freq = genre_frequency if genre_frequency is not None else load_genre_frequency()
 
     async def _node(state: TurnState) -> dict[str, object]:
-        return await mint_chips(state, sessions=sessions, phrases=phrases, settings=settings)
+        return await mint_chips(
+            state, sessions=sessions, phrases=phrases, settings=settings, genre_frequency=freq
+        )
 
     return _node

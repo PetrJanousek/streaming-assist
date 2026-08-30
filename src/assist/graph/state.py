@@ -46,6 +46,14 @@ class TurnState(TypedDict, total=False):
     constraints: ConstraintState
     delta: ConstraintDelta | None
     turn_count: int
+    # "Show me more" (T35): titles already shown across this session's history
+    # (`TurnSummary.pick_ids`, unioned in `_make_load_session`), the flag a
+    # MORE_RESULTS chip tap sets to ask retrieval to exclude them, and the
+    # signal retrieval sends back when exclusion alone emptied the pool --
+    # exhaustion, not a genuinely empty filter, so it must not enter broaden.
+    seen_catalog_ids: tuple[str, ...]
+    exclude_seen: bool
+    exclude_exhausted: bool
 
     intent_source: Literal["chip", "rules", "llm"] | None
     intent_class: str | None
@@ -104,6 +112,9 @@ def empty_turn_state(ctx: ServerUserCtx, **overrides: object) -> TurnState:
         "constraints": ConstraintState.empty(),
         "delta": None,
         "turn_count": 0,
+        "seen_catalog_ids": (),
+        "exclude_seen": False,
+        "exclude_exhausted": False,
         "intent_source": None,
         "intent_class": None,
         "query_rewrite": "",

@@ -29,6 +29,7 @@ from assist.obs.logging import get_logger
 from assist.stores.es import (
     TITLES_ALIAS,
     TITLES_SOURCE_FIELDS,
+    exclude_catalog_ids_filter,
     filters_from_constraints,
     titles_bm25_body,
     titles_knn_body,
@@ -325,18 +326,49 @@ async def _embed_query(embedder: Embedder | None, text: str) -> list[float] | No
 
 
 def _degraded(reason: DegradedReason) -> dict[str, object]:
-    return {"candidates": (), "degraded_reason": reason}
+    return {"candidates": (), "degraded_reason": reason, "exclude_exhausted": False}
 
 
 def _success(
     candidates: Sequence[Candidate],
     state: TurnState,
 ) -> dict[str, object]:
-    update: dict[str, object] = {"candidates": tuple(candidates)}
+    update: dict[str, object] = {"candidates": tuple(candidates), "exclude_exhausted": False}
     reason = state.get("degraded_reason")
     if reason in _RETRIEVAL_REASONS:
         update["degraded_reason"] = DegradedReason.NONE
     return update
+
+
+def _seen_ids_of(state: TurnState) -> tuple[str, ...]:
+    raw = state.get("seen_catalog_ids") or ()
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(item for item in raw if isinstance(item, str) and item)
+
+
+async def _pool_has_any(
+    es: Any,
+    *,
+    index: str,
+    text: str,
+    filters: Sequence[Mapping[str, Any]],
+    timeout_s: float,
+) -> bool:
+    """Existence check on `filters` alone, without the seen-id exclusion.
+
+    Disambiguates exhaustion (something matches the filter, all of it seen)
+    from a genuinely empty filter (broaden should still run). Same text +
+    filters as the real query so a text mismatch cannot masquerade as
+    exhaustion.
+    """
+    body = titles_bm25_body(text, filters, size=1)
+    try:
+        hits = await _search(es, index=index, body=body, timeout_s=timeout_s)
+    except Exception as exc:
+        log.warning("retrieve_exhaustion_check_failed", error=str(exc) or type(exc).__name__)
+        return False
+    return bool(hits)
 
 
 def _to_candidates(
@@ -393,7 +425,15 @@ async def retrieve(
 
     constraints = _constraints_of(state)
     ceiling = ceiling_maturity_rank(ctx, constraints)
-    filters = filters_from_constraints(constraints, maturity_rank_max=ceiling)
+    base_filters = filters_from_constraints(constraints, maturity_rank_max=ceiling)
+    exclude_seen = bool(state.get("exclude_seen"))
+    seen_ids = _seen_ids_of(state)
+    # MORE_RESULTS (T35): must_not on catalog_id, not a separate query. The
+    # constraint filter is unchanged -- only what counts as "already shown"
+    # is added, so a tap never narrows the user's own filter.
+    filters = base_filters
+    if exclude_seen and seen_ids:
+        filters = [*base_filters, exclude_catalog_ids_filter(seen_ids)]
     text = query_text(state)
     k_rrf = int(settings.rrf_k if rrf_k is None else rrf_k)
     emit_size = int(settings.retrieve_size if size is None else size)
@@ -485,9 +525,23 @@ async def retrieve(
 
     if candidates:
         return _success(candidates, state)
+
+    exhausted = False
+    if exclude_seen and seen_ids:
+        exhausted = await _pool_has_any(
+            es, index=index, text=text, filters=base_filters, timeout_s=timeout
+        )
+    if exhausted:
+        log.info("retrieve_exhausted", index=index, n_seen=len(seen_ids))
+        update: dict[str, object] = {"candidates": (), "exclude_exhausted": True}
+        reason = state.get("degraded_reason")
+        if reason in _RETRIEVAL_REASONS:
+            update["degraded_reason"] = DegradedReason.NONE
+        return update
+
     if _is_last_attempt(state):
         return _degraded(DegradedReason.EMPTY_CATALOG_MATCH)
-    return {"candidates": ()}
+    return {"candidates": (), "exclude_exhausted": False}
 
 
 async def broaden_constraints(state: TurnState) -> dict[str, object]:

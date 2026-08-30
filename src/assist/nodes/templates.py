@@ -35,7 +35,14 @@ _DEFAULT_PACK: tuple[SpeechAct, ...] = (
     SpeechAct.REFINE_MOOD,
     SpeechAct.REFINE_DURATION,
     SpeechAct.RESET_SOFT,
+    SpeechAct.MORE_RESULTS,
 )
+# Exhaustion (T35): the filter stays exactly as the user set it, so the acts
+# offered are ones that change it on purpose (refine or reset) -- never
+# MORE_RESULTS again (there is nothing left to page to) and never the
+# CLARIFY_* pair (those imply the filter itself matched nothing, which is
+# not what happened here).
+_EXHAUSTED_PACK: tuple[SpeechAct, ...] = (SpeechAct.REFINE_GENRE, SpeechAct.RESET_SOFT)
 _SHED_ROUTES = frozenset(
     {
         DegradedReason.GENERATIVE_TIMEOUT,
@@ -213,6 +220,10 @@ def _reason_of(state: TurnState) -> DegradedReason:
     return reason if isinstance(reason, DegradedReason) else DegradedReason.NONE
 
 
+def _exhausted_of(state: TurnState) -> bool:
+    return bool(state.get("exclude_exhausted"))
+
+
 def _intent_class_of(state: TurnState) -> str:
     raw = state.get("intent_class")
     if raw is None:
@@ -237,7 +248,11 @@ def _pick_reply_id(
     if slot == "clarify":
         return "reply.clarify_person"
     reason = _reason_of(state)
-    if reason is DegradedReason.EMPTY_CATALOG_MATCH or not _candidates_of(state):
+    if reason is DegradedReason.EMPTY_CATALOG_MATCH:
+        return "reply.empty"
+    if _exhausted_of(state) and not _candidates_of(state):
+        return "reply.exhausted"
+    if not _candidates_of(state):
         return "reply.empty"
     if reason in _SHED_ROUTES:
         return "reply.degraded"
@@ -252,11 +267,14 @@ def _chip_acts(
     *,
     reason: DegradedReason,
     empty: bool,
+    exhausted: bool = False,
 ) -> tuple[SpeechAct, ...]:
     if slot == "refusal":
         return (SpeechAct.SAFE_REFUSE_CONTINUE,)
     if slot == "clarify" or reason is DegradedReason.PERSON_AMBIGUOUS:
         return (SpeechAct.PERSON_DISAMBIGUATE,)
+    if exhausted:
+        return _EXHAUSTED_PACK
     if empty or reason is DegradedReason.EMPTY_CATALOG_MATCH:
         return (SpeechAct.CLARIFY_GENRE, SpeechAct.CLARIFY_MEDIA_TYPE)
     return _DEFAULT_PACK
@@ -321,7 +339,11 @@ def _build_update(
     candidates = _candidates_of(state)
     reason = _reason_of(state)
     empty = not candidates
-    if slot == "template" and empty and reason is DegradedReason.NONE:
+    exhausted = _exhausted_of(state) and empty
+    # Exhaustion is a normal outcome the user chose (design.md), not a
+    # DegradedReason -- the EMPTY_CATALOG_MATCH auto-set below is exactly
+    # the "empty results" degrade path, and exhaustion must skip it.
+    if slot == "template" and empty and reason is DegradedReason.NONE and not exhausted:
         reason = DegradedReason.EMPTY_CATALOG_MATCH
     if slot == "clarify":
         reason = reason if reason is not DegradedReason.NONE else DegradedReason.PERSON_AMBIGUOUS
@@ -351,7 +373,7 @@ def _build_update(
         "route": route,
         "degraded_reason": reason,
         "min_picks": min_picks,
-        "chip_speech_acts": _chip_acts(slot, reason=reason, empty=empty),
+        "chip_speech_acts": _chip_acts(slot, reason=reason, empty=empty, exhausted=exhausted),
         "timings": timings,
     }
 

@@ -101,7 +101,15 @@ def after_retrieve(state: TurnState) -> AfterRetrieve:
     if cap < 1:
         cap = configured
     candidates = state.get("candidates") or ()
-    if not candidates and attempts < cap:
+    if candidates:
+        return "rank"
+    # exclude_exhausted (T35): empty because MORE_RESULTS exclusion consumed
+    # everything the filter matches, not because the filter itself is empty.
+    # The user chose this filter explicitly -- broadening it here would be
+    # the exact silent constraint-drop the ladder exists to avoid elsewhere.
+    if state.get("exclude_exhausted"):
+        return "rank"
+    if attempts < cap:
         return "broaden"
     return "rank"
 

@@ -252,9 +252,16 @@ def _make_load_session(sessions: Any, chips: _ChipLookup) -> Any:
                 return {"degraded_reason": DegradedReason.SESSION_STORE_UNAVAILABLE}
             return {}
         chips.remember(session)
+        # Union, not just the last turn: a title shown two taps ago is still
+        # "seen" for MORE_RESULTS exclusion. TurnSummary.pick_ids already
+        # records what was shown each turn -- no new storage needed.
+        seen: set[str] = set()
+        for turn in session.turns:
+            seen.update(turn.pick_ids)
         return {
             "constraints": session.constraints,
             "turn_count": session.turn_count,
+            "seen_catalog_ids": tuple(sorted(seen)),
         }
 
     return load_session

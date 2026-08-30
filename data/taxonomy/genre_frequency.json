@@ -1,0 +1,26 @@
+{
+  "total_titles": 8807,
+  "counts": {
+    "action": 1027,
+    "anime": 247,
+    "children": 1092,
+    "classic": 202,
+    "comedy": 2255,
+    "crime": 470,
+    "documentary": 1268,
+    "drama": 3190,
+    "faith": 65,
+    "horror": 432,
+    "independent": 756,
+    "lgbtq": 102,
+    "music": 375,
+    "mystery": 98,
+    "reality": 255,
+    "romance": 986,
+    "scifi": 327,
+    "sports": 219,
+    "stand_up": 399,
+    "teen": 69,
+    "thriller": 634
+  }
+}

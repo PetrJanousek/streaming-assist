@@ -22,8 +22,17 @@ from assist.obs.logging import bind_trace_id, configure_logging, get_logger
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Offline catalog jobs")
 log = get_logger("assist.jobs.cli")
 
-_OPTIONAL_COMMANDS = ("assist.jobs.enrich", "assist.jobs.index", "assist.jobs.eval")
-_SEED_AFTER_NORMALIZE = ("assist.jobs.enrich", "assist.jobs.index")
+_OPTIONAL_COMMANDS = (
+    "assist.jobs.enrich",
+    "assist.jobs.index",
+    "assist.jobs.eval",
+    "assist.jobs.genre_frequency",
+)
+_SEED_AFTER_NORMALIZE = (
+    "assist.jobs.enrich",
+    "assist.jobs.index",
+    "assist.jobs.genre_frequency",
+)
 
 
 @app.callback()
