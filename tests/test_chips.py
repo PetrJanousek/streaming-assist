@@ -11,14 +11,16 @@ from typing import cast
 import pytest
 
 from assist.api.schemas import ChipOut, MetaOut, TurnResponse, turn_response_from_state
-from assist.domain.catalog import Person
-from assist.domain.constraints import AddOp, ConstraintDelta
+from assist.domain.catalog import Candidate, Person
+from assist.domain.constraints import AddOp, ConstraintDelta, ConstraintState, SetOp
 from assist.domain.context import ServerUserCtx
 from assist.domain.enums import (
     CreditRole,
     DegradedReason,
     DeviceClass,
+    GenreId,
     MaturityRating,
+    MediaType,
     Package,
     Route,
     SpeechAct,
@@ -116,16 +118,103 @@ def test_unknown_speech_act_is_refused_at_mint_time() -> None:
 
 def test_known_speech_act_mints_via_session_mint_chip() -> None:
     session = _session()
-    session, chips = mint_one(session, SpeechAct.REFINE_MOOD, phrases=BuiltinChipPhrases())
+    session, chips = mint_one(session, SpeechAct.REFINE_DURATION, phrases=BuiltinChipPhrases())
     assert len(chips) == 1
     chip = chips[0]
     assert isinstance(chip, ReplyChip)
     assert set(chip.model_dump()) == {"id", "label"}
     assert "delta" not in chip.model_dump()
     record = session.lookup_chip(chip.id)
-    assert record.delta == ConstraintDelta(moods=AddOp(values=("funny",)))
-    assert record.speech_act is SpeechAct.REFINE_MOOD
+    assert record.delta == ConstraintDelta(duration_max_min=SetOp(value=90))
+    assert record.speech_act is SpeechAct.REFINE_DURATION
     assert record.label == chip.label
+
+
+def _cand(catalog_id: str, *genres: GenreId) -> Candidate:
+    return Candidate(
+        catalog_id=catalog_id, title=catalog_id, media_type=MediaType.FILM, genres=genres
+    )
+
+
+def test_refine_genre_chips_are_drawn_from_the_candidate_pool() -> None:
+    session = _session()
+    session, chips = mint_one(
+        session,
+        SpeechAct.REFINE_GENRE,
+        phrases=BuiltinChipPhrases(),
+        constraints=ConstraintState(genres_include=(GenreId.HORROR,)),
+        candidates=(
+            _cand("a", GenreId.HORROR, GenreId.SCIFI),
+            _cand("b", GenreId.HORROR, GenreId.SCIFI),
+            _cand("c", GenreId.HORROR, GenreId.THRILLER),
+        ),
+        max_chips=2,
+    )
+    # scifi outranks thriller on count; horror is already constrained so it is
+    # never offered back as a no-op.
+    assert [c.label for c in chips] == ["More sci-fi", "More thriller"]
+    assert session.lookup_chip(chips[0].id).delta == ConstraintDelta(
+        genres_include=AddOp(values=("scifi",))
+    )
+
+
+def test_refine_genre_never_offers_an_already_constrained_genre() -> None:
+    session = _session()
+    _, chips = mint_one(
+        session,
+        SpeechAct.REFINE_GENRE,
+        phrases=BuiltinChipPhrases(),
+        constraints=ConstraintState(
+            genres_include=(GenreId.HORROR,), genres_exclude=(GenreId.COMEDY,)
+        ),
+        candidates=(_cand("a", GenreId.HORROR, GenreId.COMEDY),),
+    )
+    assert chips == ()
+
+
+def test_refine_genre_mints_nothing_without_a_pool() -> None:
+    session = _session()
+    _, chips = mint_one(session, SpeechAct.REFINE_GENRE, phrases=BuiltinChipPhrases())
+    assert chips == ()
+
+
+def test_refine_genre_tie_breaks_deterministically() -> None:
+    pool = (_cand("a", GenreId.THRILLER), _cand("b", GenreId.ACTION))
+    labels = []
+    for _ in range(3):
+        _, chips = mint_one(
+            _session(),
+            SpeechAct.REFINE_GENRE,
+            phrases=BuiltinChipPhrases(),
+            candidates=pool,
+            max_chips=2,
+        )
+        labels.append([c.label for c in chips])
+    assert labels[0] == labels[1] == labels[2] == ["More action", "More thriller"]
+
+
+def test_refine_genre_labels_render_ids_as_display_text() -> None:
+    _, chips = mint_one(
+        _session(),
+        SpeechAct.REFINE_GENRE,
+        phrases=BuiltinChipPhrases(),
+        candidates=(_cand("a", GenreId.STAND_UP), _cand("b", GenreId.LGBTQ)),
+        max_chips=2,
+    )
+    assert set(c.label for c in chips) == {"More stand-up", "More LGBTQ"}
+
+
+def test_refine_mood_is_skipped_while_moods_are_ungrounded() -> None:
+    # Candidate carries no moods and the index populates none, so a mood chip
+    # could only ever strand the user on an empty result set.
+    session = _session()
+    session, chips = mint_one(
+        session,
+        SpeechAct.REFINE_MOOD,
+        phrases=BuiltinChipPhrases(),
+        candidates=(_cand("a", GenreId.HORROR),),
+    )
+    assert chips == ()
 
 
 async def test_node_skips_unknown_act_and_mints_known() -> None:
