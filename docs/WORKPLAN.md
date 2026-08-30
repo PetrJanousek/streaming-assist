@@ -129,6 +129,10 @@ State: task ID, what you built, acceptance criteria with evidence (actual comman
                │
       ┌────────┼────────┐
   T25 UI   T26 eval   T27 hardening
+               │
+        T28 prompt coverage
+               │
+        T29 intent schema
 ```
 
 ### Useful agent count per stage
@@ -144,6 +148,7 @@ State: task ID, what you built, acceptance criteria with evidence (actual comman
 | 7 | T19 | 1 |
 | 8 | T22 → T23 → T24 | **1** — strictly sequential assembly |
 | 9 | T25, T26, T27 | 3 |
+| 10 | T28 → T29 | **1** — serial; T29 depends on T28's prompt landing |
 
 Spawning more than the right-hand column at any stage just produces agents that wait or collide. Stages 1 and 8 are genuinely serial — that is the shape of the work, not a planning artifact.
 
@@ -483,6 +488,69 @@ Legend: `[ ]` not started · `[~]` branch exists · `[x]` merged to main
 
 ---
 
+## 5b. Provider-readiness tasks
+
+Found by running the stack against real providers rather than fakes. The pipeline
+below the model is sound; constraint extraction is where both providers fail, for
+two unrelated reasons. Evidence is in each card.
+
+---
+
+### [x] T28 — Intent prompt constraint coverage + recency rank signal
+**Deps:** T24 · **Branch:** `task/T28-constraint-coverage`
+
+**Owns:** `src/assist/llm/prompts/intent.md`, `src/assist/nodes/rank.py`, `src/assist/config.py` (append), `.env.example`, matching tests
+
+**Do:** `intent.md` enumerates canonical genre ids and mood ids and nothing else. It never
+tells the model that `origins`, `year_min`/`year_max`, `duration_max_min` or `media_type`
+are extractable, and never explains `FieldOp` semantics. Measured: qwen3.5:4b emits
+`ClearOp(op='clear')` instead of `SetOp(op='set')` on 6 of 6 probe queries — it picks the
+right field, then clears it, so the filter never applies and the turn collapses to
+whole-catalog free text. Document every extractable field, state that a user asserting a
+constraint means `set` (or `add` for list fields) and that `clear` is only for explicit
+removal, and supply origin vocabulary derived from real index values. Separately, wire
+`recency_bias` as a **ranking signal** in `rank.py` behind a config weight — it is not a
+filter and must not enter `constraint_filters`.
+
+**Do NOT:** wire `languages` (no column in the source CSV, no field in the ES mapping —
+`rank.py:105` documents it as deliberately skipped); wire `audience` or `pace` (mapped but
+populated on 0 documents); rewire `origins`/`year`/`duration`/`media_type` — already wired
+and working, `origins` is populated on 7,976 of 8,807 docs.
+
+**Acceptance:** before/after output for the six probe queries (`Czech movies`, `movies from
+the 90s`, `korean thrillers`, `something in french`, `scary movies under 90 minutes`,
+`tv shows not movies`) run through the real prompt against a real model. An honest "the
+prompt fix did not move this model" is an acceptable result and must be reported as such.
+
+---
+
+### [x] T29 — Flatten the LLM-facing intent schema
+**Deps:** T28 · **Branch:** `task/T29-intent-schema`
+
+**Owns:** `src/assist/nodes/intent.py` (LLM-facing schema + adapter), `tests/test_intent.py`
+
+**Do:** Anthropic rejects **every** intent call with `400 invalid_request_error: "The
+compiled grammar is too large, which would cause performance issues."` — 6 of 6 probe
+queries. The request never reaches the model; intent falls back to rules, no constraints
+survive, and every turn degrades. Cause: invariant 1 forbids tools, so `gateway.py` uses
+`method="json_schema"`; the provider compiles that schema into a grammar, and
+`IntentUpdate` is 9,737 bytes with 8 nested `$defs` — `ConstraintDelta` alone is 7,728
+bytes across 15 fields, each an `anyOf` over the five-op `FieldOp` union, plus ~20 genre
+and ~16 mood enum members. Replace the LLM-facing schema with a flat operation list
+(`[{field, op, value}]` — one shape, three keys) and convert it to `ConstraintDelta` in a
+pure server-side adapter. The merge algebra, `ConstraintDelta` and `ConstraintState` do not
+change; only what crosses the provider boundary does.
+
+**Acceptance:** the same six probe queries succeed against **live Anthropic Haiku** with no
+400 — actual command output required, not a fake model; the compiled schema is materially
+smaller (report the byte count before and after); the adapter is pure and unit-tested
+including malformed and unknown-field input; `tests/test_graph_shape.py` still passes, so
+invariant 1 holds and no tools are bound. A test must make a real provider call or be
+explicitly marked as requiring a key — the current suite passes only because it injects
+fake models, which is why this bug survived to production.
+
+---
+
 ## 6. File ownership map
 
 Two agents must never edit the same file concurrently. If your task needs a file it does not own, **report it instead of editing it**.
@@ -505,3 +573,6 @@ Two agents must never edit the same file concurrently. If your task needs a file
 | `src/assist/api/**` | T13 (T25 adds `routes_stream.py` only) |
 | `src/assist/jobs/**` | T10, T11, T12, T26 — one file each |
 | `README.md` | T27 (others append a section only if they change how it runs) |
+| `src/assist/llm/prompts/intent.md` | T15, then T28 |
+| `src/assist/nodes/rank.py` | T19, then T28 (recency signal only) |
+| `src/assist/nodes/intent.py` | T15, then T29 (LLM-facing schema + adapter only) |
