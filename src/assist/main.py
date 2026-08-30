@@ -14,7 +14,7 @@ from assist.api.routes_ops import router as ops_router
 from assist.api.routes_stream import install as install_stream
 from assist.api.routes_turn import router as turn_router
 from assist.config import settings
-from assist.graph.build import build_graph
+from assist.graph.build import GraphDeps, build_graph
 from assist.obs.logging import configure_logging, get_logger
 from assist.stores.cache import CacheStore
 from assist.stores.ratelimit import RateLimiter
@@ -23,13 +23,15 @@ from assist.stores.session import SessionRepository
 log = get_logger("assist.main")
 
 
-def _build_resources(redis: Redis) -> AppResources:
+def _build_resources(redis: Redis, deps: GraphDeps) -> AppResources:
     return AppResources(
         redis=redis,
         cache=CacheStore(redis),
         sessions=SessionRepository(redis),
         rate_limiter=RateLimiter(redis),
-        graph=build_graph(),
+        # Without live deps the retrieve and session stages are no-ops, so every
+        # turn degrades to empty_catalog_match. See GraphDeps.live().
+        graph=build_graph(deps=deps),
         profiles=default_profile_catalog(),
     )
 
@@ -40,14 +42,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     owned = False
     if getattr(app.state, "resources", None) is None:
         redis = Redis.from_url(settings.redis_url, decode_responses=True)
-        app.state.resources = _build_resources(redis)
+        deps = GraphDeps.live(settings=settings)
+        app.state.graph_deps = deps
+        app.state.resources = _build_resources(redis, deps)
         owned = True
-        log.info("resources_ready", redis_url=settings.redis_url)
+        log.info(
+            "resources_ready",
+            redis_url=settings.redis_url,
+            elasticsearch_url=settings.elasticsearch_url,
+            llm_provider=str(settings.llm_provider),
+        )
     try:
         yield
     finally:
         if owned:
             await app.state.resources.redis.aclose()
+            await app.state.graph_deps.es.close()
 
 
 def create_app(*, resources: AppResources | None = None) -> FastAPI:
