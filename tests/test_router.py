@@ -410,6 +410,25 @@ async def test_template_empty_catalog_degrades() -> None:
     )
 
 
+async def test_template_exhaustion_is_not_a_degraded_reason() -> None:
+    # T35: exclusion emptied the pool, not the filter itself. The reply must
+    # say so plainly, without tripping EMPTY_CATALOG_MATCH or the CLARIFY_*
+    # chips that imply the filter matched nothing.
+    out = await reply_template(
+        _state(
+            intent_class="other",
+            message_type="chip",
+            chip_id="c1",
+            candidates=(),
+            exclude_exhausted=True,
+        )
+    )
+    assert out["route"] is Route.TEMPLATE
+    assert out["degraded_reason"] is DegradedReason.NONE
+    assert "everything" in str(out["reply"]).lower()
+    assert out["chip_speech_acts"] == (SpeechAct.REFINE_GENRE, SpeechAct.RESET_SOFT)
+
+
 async def test_clarify_and_refusal_copy() -> None:
     clarify = await reply_clarify(_state(person_ambiguous=True, candidates=CANDIDATES))
     assert clarify["route"] is Route.CLARIFY

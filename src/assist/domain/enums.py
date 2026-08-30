@@ -101,6 +101,7 @@ class SpeechAct(StrEnum):
     TOGGLE_LOCAL_ORIGINALS = "toggle_local_originals"
     PERSON_DISAMBIGUATE = "person_disambiguate"
     MORE_LIKE_PICK = "more_like_pick"
+    MORE_RESULTS = "more_results"
     RESET_SOFT = "reset_soft"
     CLARIFY_GENRE = "clarify_genre"
     CLARIFY_MEDIA_TYPE = "clarify_media_type"

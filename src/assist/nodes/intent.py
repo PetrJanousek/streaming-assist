@@ -641,7 +641,13 @@ def _from_chip(state: TurnState, chips: ChipSource | None) -> dict[str, object]:
         query_rewrite="",
         constraint_delta=record.delta,
     )
-    return _state_from_update(update, source="chip")
+    out = _state_from_update(update, source="chip")
+    if record.speech_act is SpeechAct.MORE_RESULTS:
+        # MORE_RESULTS carries an empty delta (constraints stay untouched) --
+        # the whole point of the tap is retrieval excluding what is already
+        # seen, not narrowing the filter.
+        out["exclude_seen"] = True
+    return out
 
 
 def _constraints_of(state: TurnState) -> ConstraintState:

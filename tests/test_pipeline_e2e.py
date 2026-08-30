@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import statistics
 import time
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from langchain_core.exceptions import ModelRateLimitError, OutputParserException
@@ -16,7 +16,7 @@ from langchain_core.runnables import Runnable, RunnableLambda
 from pydantic import Field
 
 from assist.domain.catalog import Candidate, Person, Pick
-from assist.domain.constraints import ConstraintState
+from assist.domain.constraints import AddOp, ConstraintDelta, ConstraintState, SetOp
 from assist.domain.context import ServerUserCtx
 from assist.domain.enums import (
     CreditRole,
@@ -28,7 +28,7 @@ from assist.domain.enums import (
     Route,
 )
 from assist.graph.build import GraphDeps, ainvoke_turn, build_graph
-from assist.graph.state import ReplyChip, empty_turn_state
+from assist.graph.state import ReplyChip, TurnState, empty_turn_state
 from assist.nodes.intent import IntentClass, IntentUpdate, to_wire
 from assist.nodes.people import MemoryPeopleIndex
 from assist.nodes.reply import GroundedReply
@@ -335,6 +335,100 @@ async def test_multi_turn_sticky_constraints_picks_and_chips() -> None:
     second_picks = _picks_of(second)
     assert 1 <= len(second_picks) <= 8
     assert {pick.catalog_id for pick in second_picks} <= {"s1", "s2", "s3", "s4", "s5"}
+
+
+# ---------------------------------------------------------------------------
+# MORE_RESULTS (T35): tap keeps the filter, pages fresh titles, then exhausts
+# ---------------------------------------------------------------------------
+
+HORROR_90S_HITS = tuple(
+    _hit(f"h{i}", f"Horror {i}", genres=["horror"], year=1990 + i) for i in range(1, 6)
+)
+
+
+class SeenAwareEs:
+    """Real must_not honoring: excludes whatever catalog_id the query filter names.
+
+    CatalogEs (used by the other e2e tests) ignores the query body entirely --
+    that is fine for those tests, but the whole point here is proving
+    retrieval actually narrows on exclusion.
+    """
+
+    def __init__(self, hits: tuple[dict[str, Any], ...]) -> None:
+        self.hits = hits
+        self.calls = 0
+
+    async def search(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls += 1
+        body = kwargs.get("body") or {}
+        bool_q = body.get("query", {}).get("bool", {}) if isinstance(body, dict) else {}
+        excluded: set[str] = set()
+        for clause in bool_q.get("filter", []) if isinstance(bool_q, dict) else []:
+            inner = clause.get("bool", {}) if isinstance(clause, dict) else {}
+            for must_not in inner.get("must_not", []):
+                terms = must_not.get("terms", {})
+                excluded.update(terms.get("catalog_id", []))
+        remaining = [h for h in self.hits if h["_source"]["catalog_id"] not in excluded]
+        return {"hits": {"hits": remaining}}
+
+
+def _fake_horror_intent(_state: TurnState) -> dict[str, object]:
+    return {
+        "intent_source": "rules",
+        "intent_class": "pure_genre_facet",
+        "query_rewrite": "",
+        "delta": ConstraintDelta(
+            genres_include=AddOp(values=(GenreId.HORROR.value,)),
+            year_min=SetOp(value=1990),
+            year_max=SetOp(value=1999),
+        ),
+    }
+
+
+async def test_more_results_pages_then_exhausts_keeping_the_filter() -> None:
+    sessions = MemorySessions()
+    es = SeenAwareEs(HORROR_90S_HITS)
+    deps = _deps(sessions=sessions, es=cast(Any, es), model=BoomChat())
+    session_id = "sess-more-results"
+
+    first = await _turn(
+        "horror movies from 90s",
+        deps=deps,
+        session_id=session_id,
+        node_overrides={"intent": _fake_horror_intent},
+    )
+    constraints0 = _constraints_of(first)
+    assert constraints0.genres_include == (GenreId.HORROR,)
+    assert (constraints0.year_min, constraints0.year_max) == (1990, 1999)
+    first_picks = _picks_of(first)
+    assert len(first_picks) == 3  # grid minimum, padded from the 5-title pool
+    more_chip = next(c for c in _chips_of(first) if c.label == "Show me more")
+
+    # Tap 1: same filter, fresh titles -- the two not shown in turn one.
+    second = await _turn("", deps=deps, session_id=session_id, chip_id=more_chip.id)
+    constraints1 = _constraints_of(second)
+    assert constraints1 == constraints0
+    second_picks = _picks_of(second)
+    assert second_picks
+    assert {p.catalog_id for p in second_picks}.isdisjoint({p.catalog_id for p in first_picks})
+    assert second["degraded_reason"] is DegradedReason.NONE
+
+    # Tap 2 (same chip_id -- a still-visible/re-tapped chip, ChipRecord is not
+    # single-use): every title has now been shown, so retrieval finds nothing
+    # fresh. This must exhaust, not silently broaden away the 90s/horror filter.
+    third = await _turn("", deps=deps, session_id=session_id, chip_id=more_chip.id)
+    constraints2 = _constraints_of(third)
+    assert constraints2 == constraints0
+    assert _picks_of(third) == ()
+    assert third["degraded_reason"] is DegradedReason.NONE
+    assert third["exclude_exhausted"] is True
+    assert "everything" in str(third["reply"]).lower()
+    third_labels = {c.label for c in _chips_of(third)}
+    # REFINE_GENRE is requested but candidates is empty, so it honestly mints
+    # nothing (same "no pool, no chip" rule as any other turn) -- RESET_SOFT
+    # does not need a pool and is what is left for the user to act on.
+    assert "Show me more" not in third_labels
+    assert "Start over" in third_labels
 
 
 # ---------------------------------------------------------------------------

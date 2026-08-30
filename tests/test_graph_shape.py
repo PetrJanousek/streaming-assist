@@ -700,6 +700,18 @@ def test_after_retrieve_ignores_cap_above_settings() -> None:
     assert after_retrieve(still_open) == "broaden"
 
 
+def test_after_retrieve_exhausted_skips_broaden() -> None:
+    ctx = _ctx()
+    exhausted = empty_turn_state(
+        ctx,
+        retrieve_attempts=0,
+        retrieve_max_attempts=2,
+        candidates=(),
+        exclude_exhausted=True,
+    )
+    assert after_retrieve(exhausted) == "rank"
+
+
 def test_after_retrieve_tolerates_both_media_type_sentinels() -> None:
     ctx = _ctx()
     for media_type in (None, MediaType.ANY):

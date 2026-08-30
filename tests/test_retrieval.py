@@ -449,7 +449,7 @@ async def test_empty_first_attempt_does_not_mark_empty_catalog() -> None:
         es=cast(Any, fake),
         embedder=None,
     )
-    assert out == {"candidates": ()}
+    assert out == {"candidates": (), "exclude_exhausted": False}
 
 
 async def test_empty_last_attempt_sets_empty_catalog_match() -> None:
@@ -576,6 +576,146 @@ async def test_hostile_retrieve_return_cannot_write_attempt_keys() -> None:
     fake.bm25_hits = [_hit("s1", "Heat")]
     out = await retrieve(_state(query_rewrite="heat"), es=cast(Any, fake), embedder=None)
     assert set(out).isdisjoint({"retrieve_attempts", "retrieve_max_attempts"})
+
+
+# ---------------------------------------------------------------------------
+# MORE_RESULTS exclusion (T35): must_not on catalog_id, exhaustion detection
+# ---------------------------------------------------------------------------
+
+
+class FakeEsExclusionAware(FakeEs):
+    """bm25 returns hits only for a query with no catalog_id must_not clause.
+
+    Models a filter that genuinely matches titles, all of which are already
+    seen -- the disambiguation `_pool_has_any` exists to make.
+    """
+
+    async def search(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        raw_body = kwargs.get("body")
+        body: dict[str, Any] = dict(raw_body) if isinstance(raw_body, Mapping) else {}
+        if "knn" in body or "sort" in body:
+            return {"hits": {"hits": []}}
+        blob = json.dumps(body.get("query"))
+        if '"must_not"' in blob and '"catalog_id"' in blob:
+            return {"hits": {"hits": []}}
+        return {"hits": {"hits": self.bm25_hits}}
+
+
+def test_exclude_filter_is_a_must_not_terms_clause_on_catalog_id() -> None:
+    from assist.stores.es import exclude_catalog_ids_filter
+
+    clause = exclude_catalog_ids_filter(["a", "b"])
+    assert clause == {"bool": {"must_not": [{"terms": {"catalog_id": ["a", "b"]}}]}}
+
+
+async def test_retrieve_applies_exclusion_filter_when_flagged() -> None:
+    fake = FakeEs()
+    fake.bm25_hits = [_hit("s1", "Fresh")]
+    await retrieve(
+        _state(exclude_seen=True, seen_catalog_ids=("s0",)),
+        es=cast(Any, fake),
+        embedder=None,
+    )
+    bodies = _bm25_bodies(fake)
+    assert bodies
+    blob = json.dumps(bodies[0])
+    assert '"catalog_id": ["s0"]' in blob
+
+
+async def test_retrieve_omits_exclusion_filter_when_not_flagged() -> None:
+    fake = FakeEs()
+    fake.bm25_hits = [_hit("s1", "Fresh")]
+    await retrieve(
+        _state(exclude_seen=False, seen_catalog_ids=("s0",)),
+        es=cast(Any, fake),
+        embedder=None,
+    )
+    bodies = _bm25_bodies(fake)
+    assert bodies
+    filter_clauses = bodies[0]["query"]["bool"].get("filter", [])
+    assert "catalog_id" not in json.dumps(filter_clauses)
+
+
+async def test_exhaustion_sets_flag_without_degrading() -> None:
+    fake = FakeEsExclusionAware()
+    fake.bm25_hits = [_hit("s1", "Fresh")]
+    out = await retrieve(
+        _state(
+            exclude_seen=True,
+            seen_catalog_ids=("s0",),
+            retrieve_attempts=0,
+            retrieve_max_attempts=2,
+        ),
+        es=cast(Any, fake),
+        embedder=None,
+    )
+    assert out["candidates"] == ()
+    assert out["exclude_exhausted"] is True
+    assert out.get("degraded_reason", DegradedReason.NONE) is DegradedReason.NONE
+
+
+async def test_genuinely_empty_filter_with_exclusion_flag_is_not_exhausted() -> None:
+    # Nothing matches the filter at all, with or without exclusion -- this
+    # must broaden exactly like the no-exclusion case, not exhaust.
+    fake = FakeEs()
+    out = await retrieve(
+        _state(
+            exclude_seen=True,
+            seen_catalog_ids=("s0",),
+            retrieve_attempts=0,
+            retrieve_max_attempts=2,
+        ),
+        es=cast(Any, fake),
+        embedder=None,
+    )
+    assert out["candidates"] == ()
+    assert out["exclude_exhausted"] is False
+
+
+async def test_exhaustion_does_not_enter_broaden_and_keeps_constraints() -> None:
+    fake = FakeEsExclusionAware()
+    fake.bm25_hits = [_hit("s1", "Fresh")]
+    visits = {"retrieve": 0, "broaden_constraints": 0}
+    prior = ConstraintState(genres_include=(GenreId.HORROR,), year_min=1990, year_max=1999)
+
+    async def bound_retrieve(state: TurnState) -> dict[str, object]:
+        return await retrieve(state, es=cast(Any, fake), embedder=None)
+
+    compiled = build_graph(
+        node_overrides={
+            "retrieve": bound_retrieve,
+            "broaden_constraints": broaden_constraints,
+        }
+    )
+    result = await compiled.ainvoke(
+        _state(
+            exclude_seen=True,
+            seen_catalog_ids=("s0",),
+            constraints=prior,
+            retrieve_max_attempts=2,
+        )
+    )
+    async for update in compiled.astream(
+        _state(
+            exclude_seen=True,
+            seen_catalog_ids=("s0",),
+            constraints=prior,
+            retrieve_max_attempts=2,
+        ),
+        stream_mode="updates",
+    ):
+        for name in update:
+            if name in visits:
+                visits[name] += 1
+    assert visits["retrieve"] == 1
+    assert visits["broaden_constraints"] == 0
+    assert result["candidates"] == ()
+    assert result["exclude_exhausted"] is True
+    assert result["degraded_reason"] is DegradedReason.NONE
+    # The year/genre filter the user chose survives untouched -- the ladder
+    # never ran, so it never had a chance to drop them.
+    assert result["constraints"] == prior
 
 
 # ---------------------------------------------------------------------------

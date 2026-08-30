@@ -43,6 +43,12 @@
       "template": "More like this"
     },
     {
+      "id": "chip.more_results",
+      "speech_act": "more_results",
+      "kind": "chip",
+      "template": "Show me more"
+    },
+    {
       "id": "chip.reset_soft",
       "speech_act": "reset_soft",
       "kind": "chip",
@@ -173,6 +179,12 @@
       "speech_act": "refine_genre",
       "kind": "reply",
       "template": "I had a problem on this turn. Here are the best matches I still have."
+    },
+    {
+      "id": "reply.exhausted",
+      "speech_act": "more_results",
+      "kind": "reply",
+      "template": "That's everything matching your filters right now."
     }
   ]
 }
