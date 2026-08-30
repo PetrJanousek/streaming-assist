@@ -187,6 +187,52 @@ def _toggle_local(constraints: ConstraintState, base: ChipPhrase) -> ChipPhrase:
     return base
 
 
+# StrEnum values are storage ids, not display text. Only the ones whose id does
+# not survive a plain underscore swap need an entry here.
+_GENRE_LABELS: dict[GenreId, str] = {
+    GenreId.SCIFI: "sci-fi",
+    GenreId.STAND_UP: "stand-up",
+    GenreId.LGBTQ: "LGBTQ",
+}
+
+
+def _genre_label(genre: GenreId) -> str:
+    return _GENRE_LABELS.get(genre, genre.value.replace("_", " "))
+
+
+def _pool_genre_phrases(
+    base: ChipPhrase,
+    constraints: ConstraintState,
+    candidates: Sequence[Candidate],
+    limit: int,
+) -> tuple[ChipPhrase, ...]:
+    """Refine-genre chips drawn from the retrieved pool, most common first.
+
+    genres_include is ANDed clause-per-genre in ES, so a genre the pool does not
+    contain narrows the result set to nothing. Counting the candidates the user
+    is already looking at is what keeps every chip non-empty when tapped.
+    """
+    if limit <= 0:
+        return ()
+    already = set(constraints.genres_include) | set(constraints.genres_exclude)
+    counts: dict[GenreId, int] = {}
+    for candidate in candidates:
+        for genre in candidate.genres:
+            if genre in already:
+                continue
+            counts[genre] = counts.get(genre, 0) + 1
+    # Ties break on the genre id so the same pool always mints the same chips.
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].value))
+    return tuple(
+        ChipPhrase(
+            speech_act=base.speech_act,
+            label=f"More {_genre_label(genre)}",
+            delta=ConstraintDelta(genres_include=AddOp(values=(genre.value,))),
+        )
+        for genre, _ in ranked[:limit]
+    )
+
+
 def _more_like_phrase(base: ChipPhrase, candidate: Candidate | None) -> ChipPhrase:
     if candidate is None:
         return base
@@ -259,6 +305,22 @@ def mint_one(
             )
             reply_chips.append(to_reply_chip(record))
         return session, tuple(reply_chips)
+
+    if act is SpeechAct.REFINE_GENRE:
+        # No pool signal means no honest refinement to offer, so mint nothing
+        # rather than fall back to a fixed genre the results may not contain.
+        options = _pool_genre_phrases(phrase, current, candidates, max_chips)
+        for bound in options:
+            session, record = session.mint_chip(
+                label=bound.label, delta=bound.delta, speech_act=act
+            )
+            reply_chips.append(to_reply_chip(record))
+        return session, tuple(reply_chips)
+
+    if act is SpeechAct.REFINE_MOOD:
+        # Candidate carries no moods, so a mood chip cannot be grounded in the
+        # pool the way a genre chip can. Skipped until it can be.
+        return session, ()
 
     bound = _toggle_local(current, phrase) if act is SpeechAct.TOGGLE_LOCAL_ORIGINALS else phrase
     session, record = session.mint_chip(label=bound.label, delta=bound.delta, speech_act=act)
