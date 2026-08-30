@@ -329,7 +329,9 @@ def _frame_for_node(
     sanitized: bool,
     seen: set[str],
 ) -> dict[str, object] | None:
-    if node == "merge_constraints":
+    # resolve_people re-emits: it adds people_include after merge_constraints has
+    # already sent its frame, so without this the UI never sees a resolved person.
+    if node in ("merge_constraints", "resolve_people"):
         return _guard_payload(
             "constraints",
             {"constraints": _constraints_public(accumulated.get("constraints"))},
