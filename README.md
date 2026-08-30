@@ -5,6 +5,13 @@ Grounded conversational search assist for a streaming catalog.
 You type a vague query. The system returns catalog-grounded title picks, one short
 reply, and tappable refinement chips.
 
+![streaming-assist in one turn](docs/demo.gif)
+
+One turn, unedited: the query resolves into sticky constraints (`comedy`,
+`2000-2009`, one person), stages tick across as the graph runs, picks stream in,
+and the chips offer grounded refinements. Constraints persist into the next turn.
+[Full-resolution clip](docs/demo.mp4).
+
 The model extracts intent and writes one sentence. It never picks the catalog. It
 never names a title from memory. It never decides control flow.
 
