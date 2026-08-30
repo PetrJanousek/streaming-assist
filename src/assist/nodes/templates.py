@@ -117,8 +117,21 @@ class PhraseBank:
         return len(self._phrases)
 
 
+_PHRASES_REL = Path("data") / "phrases" / "bank.json"
+
+
 def default_phrases_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "data" / "phrases" / "bank.json"
+    """Resolve the phrase bank from cwd, an editable checkout, or the image.
+
+    An installed package sits under `.venv/lib/.../site-packages`, so a fixed
+    `parents[3]` walks into the venv instead of the repo. Search instead.
+    """
+    for start in (Path.cwd(), Path(__file__).resolve()):
+        for parent in [start, *start.parents]:
+            candidate = parent / _PHRASES_REL
+            if candidate.is_file():
+                return candidate
+    return Path("/app") / _PHRASES_REL
 
 
 def load_phrase_bank(path: Path | None = None) -> PhraseBank:
