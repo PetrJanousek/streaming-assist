@@ -14,19 +14,33 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from pydantic import Field
 
-from assist.domain.constraints import AddOp, ConstraintDelta, ConstraintState, SetOp
+from assist.domain.constraints import (
+    AddOp,
+    ClearOp,
+    ConstraintDelta,
+    ConstraintState,
+    RemoveOp,
+    ReplaceOp,
+    SetOp,
+)
 from assist.domain.context import ServerUserCtx
 from assist.domain.enums import DeviceClass, GenreId, MaturityRating, MediaType, Package, SpeechAct
 from assist.graph.state import PersonSoft, empty_turn_state
 from assist.llm.cost import CostCallbackHandler
+from assist.llm.gateway import UnavailableChatModel
 from assist.llm.prompts import load_prompt
 from assist.nodes import intent as intent_mod
 from assist.nodes.intent import (
     IntentClass,
+    IntentOpWire,
     IntentUpdate,
+    IntentUpdateWire,
     match_rules,
     normalize_text,
     run_intent,
+    to_constraint_delta,
+    to_intent_update,
+    to_wire,
 )
 from assist.stores.cache import constraints_hash
 from assist.stores.session import ChipInvalid, Session
@@ -81,7 +95,7 @@ class _BoomChat(BaseChatModel):
 
 
 class _FixedChat(BaseChatModel):
-    canned: IntentUpdate
+    canned: IntentUpdateWire
     call_log: list[int] = Field(default_factory=list)
 
     @property
@@ -102,7 +116,7 @@ class _FixedChat(BaseChatModel):
         schema: dict[str, Any] | type[Any],
         **kwargs: Any,
     ) -> Runnable[Any, Any]:
-        def _run(_input: Any) -> IntentUpdate:
+        def _run(_input: Any) -> IntentUpdateWire:
             self.call_log.append(1)
             return self.canned
 
@@ -313,29 +327,33 @@ async def test_malformed_model_response_degrades_to_rules() -> None:
 
 
 async def test_llm_unavailable_degrades_to_rules_not_raise() -> None:
+    # Force unavailability explicitly rather than relying on the environment
+    # having no ANTHROPIC_API_KEY: a real key must never make this test place
+    # a live call (T29 -- a second agent owns the live-provider acceptance
+    # criterion; this suite is fakes-only).
     state = empty_turn_state(_ctx(), text="something cozy for a rainy night")
-    out = await run_intent(state, cache=FakeCache())
+    out = await run_intent(state, cache=FakeCache(), model=UnavailableChatModel())
     assert out["intent_source"] == "rules"
     assert isinstance(out["delta"], ConstraintDelta)
 
 
 async def test_person_ids_from_index_ignored() -> None:
-    canned = IntentUpdate(
-        intent_class=IntentClass.PEOPLE_FUZZY,
+    # The wire schema has no person_ids_from_index field at all -- the model
+    # cannot emit one. This test now covers the still-relevant guarantee that
+    # people_include/people_exclude ops never survive the adapter.
+    canned = IntentUpdateWire(
+        intent_class=IntentClass.PEOPLE_FUZZY.value,
         query_rewrite="older spy guy 90s",
-        constraint_delta=ConstraintDelta(
-            people_include=AddOp(values=("p_abc",)),
-            year_min=SetOp(value=1990),
-            year_max=SetOp(value=1999),
+        ops=(
+            IntentOpWire(field="people_include", op="add", value="p_abc"),
+            IntentOpWire(field="year_min", op="set", value="1990"),
+            IntentOpWire(field="year_max", op="set", value="1999"),
         ),
-        person_soft=PersonSoft(
-            role="actor",
-            era_year_min=1990,
-            era_year_max=1999,
-            free_hint="older spy",
-        ),
+        person_role="actor",
+        person_era_year_min=1990,
+        person_era_year_max=1999,
+        person_free_hint="older spy",
         person_mentions=("the spy guy",),
-        person_ids_from_index=("p_abc", "p_def"),
     )
     model = _FixedChat(canned=canned)
     cache = FakeCache()
@@ -350,7 +368,9 @@ async def test_person_ids_from_index_ignored() -> None:
     assert delta.people_exclude is None
     assert delta.year_min == SetOp(value=1990)
     assert out["person_mentions"] == ("the spy guy",)
-    assert out["person_soft"] == canned.person_soft
+    assert out["person_soft"] == PersonSoft(
+        role="actor", era_year_min=1990, era_year_max=1999, free_hint="older spy"
+    )
     assert "person_ids_from_index" not in out
     stored = IntentUpdate.model_validate_json(next(iter(cache.store.values())))
     assert stored.person_ids_from_index == ()
@@ -358,10 +378,10 @@ async def test_person_ids_from_index_ignored() -> None:
 
 
 async def test_llm_success_writes_cache_and_records_llm_source() -> None:
-    canned = IntentUpdate(
-        intent_class=IntentClass.MOOD_GENRE,
+    canned = IntentUpdateWire(
+        intent_class=IntentClass.MOOD_GENRE.value,
         query_rewrite="cozy rainy night",
-        constraint_delta=ConstraintDelta(moods=AddOp(values=("cozy",))),
+        ops=(IntentOpWire(field="moods", op="add", value="cozy"),),
     )
     model = _FixedChat(canned=canned)
     cache = FakeCache()
@@ -382,15 +402,15 @@ async def test_uses_gateway_structured_output_with_fallback(
     seen: dict[str, object] = {}
 
     def _fake(
-        schema: type[IntentUpdate],
+        schema: type[IntentUpdateWire],
         **kwargs: Any,
-    ) -> Runnable[Any, IntentUpdate]:
+    ) -> Runnable[Any, IntentUpdateWire]:
         seen["schema"] = schema
         seen["fallback"] = kwargs.get("fallback")
 
-        def _run(_input: Any) -> IntentUpdate:
-            return IntentUpdate(
-                intent_class=IntentClass.MOOD_GENRE,
+        def _run(_input: Any) -> IntentUpdateWire:
+            return IntentUpdateWire(
+                intent_class=IntentClass.MOOD_GENRE.value,
                 query_rewrite="cozy",
             )
 
@@ -401,7 +421,7 @@ async def test_uses_gateway_structured_output_with_fallback(
         empty_turn_state(_ctx(), text="something cozy for a rainy night"),
         cache=FakeCache(),
     )
-    assert seen["schema"] is IntentUpdate
+    assert seen["schema"] is IntentUpdateWire
     assert seen["fallback"] is not None
     assert out["intent_source"] == "llm"
 
@@ -410,12 +430,12 @@ async def test_cost_callback_is_passed_on_llm_path(monkeypatch: pytest.MonkeyPat
     seen: dict[str, object] = {}
     handler = CostCallbackHandler()
 
-    def _fake(schema: type[IntentUpdate], **kwargs: Any) -> Runnable[Any, IntentUpdate]:
+    def _fake(schema: type[IntentUpdateWire], **kwargs: Any) -> Runnable[Any, IntentUpdateWire]:
         assert kwargs.get("fallback") is not None
 
-        def _run(_input: Any, config: RunnableConfig) -> IntentUpdate:
+        def _run(_input: Any, config: RunnableConfig) -> IntentUpdateWire:
             seen["config"] = config
-            return IntentUpdate(intent_class=IntentClass.OTHER, query_rewrite="x")
+            return IntentUpdateWire(intent_class=IntentClass.OTHER.value, query_rewrite="x")
 
         return RunnableLambda(_run)
 
@@ -432,3 +452,241 @@ async def test_cost_callback_is_passed_on_llm_path(monkeypatch: pytest.MonkeyPat
     raw_handlers = getattr(callbacks, "handlers", None)
     assert isinstance(raw_handlers, list)
     assert handler in raw_handlers
+
+
+# --- T29: to_constraint_delta / to_intent_update adapter -------------------
+
+
+def test_adapter_scalar_ops_produce_correctly_typed_sets() -> None:
+    delta = to_constraint_delta(
+        [
+            IntentOpWire(field="media_type", op="set", value="film"),
+            IntentOpWire(field="year_min", op="set", value="1990"),
+            IntentOpWire(field="duration_max_min", op="set", value="90"),
+        ]
+    )
+    assert delta.media_type == SetOp(value="film")
+    assert delta.year_min == SetOp(value=1990)
+    assert delta.duration_max_min == SetOp(value=90)
+
+
+def test_adapter_bool_field_coerces() -> None:
+    delta = to_constraint_delta(
+        [IntentOpWire(field="local_originals_only", op="set", value="true")]
+    )
+    assert delta.local_originals_only == SetOp(value=True)
+
+
+def test_adapter_coalesces_multiple_ops_on_one_list_field() -> None:
+    delta = to_constraint_delta(
+        [
+            IntentOpWire(field="genres_include", op="add", value="comedy"),
+            IntentOpWire(field="genres_include", op="add", value="drama"),
+            IntentOpWire(field="genres_include", op="add", value="comedy"),  # dup
+        ]
+    )
+    assert delta.genres_include == AddOp(values=("comedy", "drama"))
+
+
+def test_adapter_coalesces_remove_and_replace_ops_too() -> None:
+    removed = to_constraint_delta(
+        [
+            IntentOpWire(field="genres_exclude", op="remove", value="horror"),
+            IntentOpWire(field="genres_exclude", op="remove", value="crime"),
+        ]
+    )
+    assert removed.genres_exclude == RemoveOp(values=("horror", "crime"))
+
+    replaced = to_constraint_delta(
+        [
+            IntentOpWire(field="origins", op="replace", value="France"),
+            IntentOpWire(field="origins", op="replace", value="Japan"),
+        ]
+    )
+    assert replaced.origins == ReplaceOp(values=("France", "Japan"))
+
+
+def test_adapter_drops_unknown_field_but_keeps_the_rest() -> None:
+    delta = to_constraint_delta(
+        [
+            IntentOpWire(field="not_a_real_field", op="set", value="whatever"),
+            IntentOpWire(field="media_type", op="set", value="series"),
+        ]
+    )
+    assert delta.media_type == SetOp(value="series")
+
+
+@pytest.mark.parametrize(
+    "ops",
+    [
+        [{"field": "year_min", "op": "bogus_op", "value": "1990"}],
+        [{"field": "year_min", "op": "set", "value": ""}],
+        [{"field": "year_min", "op": "set", "value": "not-a-number"}],
+        [{"field": "genres_include", "op": "set", "value": "comedy"}],  # set on list field
+        [{"field": "media_type", "op": "add", "value": "film"}],  # add on scalar field
+        [],
+        [None],
+        ["garbage"],
+        [{"field": 123, "op": None, "value": []}],
+    ],
+)
+def test_adapter_malformed_input_drops_cleanly_never_raises(ops: list[object]) -> None:
+    delta = to_constraint_delta(ops)
+    assert isinstance(delta, ConstraintDelta)
+    assert delta == ConstraintDelta()
+
+
+def test_adapter_completely_garbage_payload_never_raises() -> None:
+    assert to_constraint_delta(None) == ConstraintDelta()
+
+
+def test_adapter_drops_languages_and_people_ops() -> None:
+    delta = to_constraint_delta(
+        [
+            IntentOpWire(field="languages", op="add", value="french"),
+            IntentOpWire(field="people_include", op="add", value="p_1"),
+            IntentOpWire(field="people_exclude", op="add", value="p_2"),
+        ]
+    )
+    assert delta == ConstraintDelta()
+
+
+def test_adapter_reset_soft_round_trips() -> None:
+    assert to_constraint_delta([], reset_soft=True).reset_soft is True
+    assert (
+        to_constraint_delta([IntentOpWire(field="reset_soft", op="set", value="true")]).reset_soft
+        is True
+    )
+    assert (
+        to_constraint_delta(
+            [IntentOpWire(field="reset_soft", op="set", value="false")], reset_soft=True
+        ).reset_soft
+        is False
+    )
+
+
+def test_adapter_clear_works_on_list_and_scalar_fields() -> None:
+    delta = to_constraint_delta(
+        [
+            IntentOpWire(field="genres_include", op="clear", value=""),
+            IntentOpWire(field="year_min", op="clear", value=""),
+        ]
+    )
+    assert delta.genres_include == ClearOp()
+    assert delta.year_min == ClearOp()
+
+
+def test_adapter_does_not_mutate_input_and_is_deterministic() -> None:
+    ops = (
+        IntentOpWire(field="genres_include", op="add", value="comedy"),
+        IntentOpWire(field="media_type", op="set", value="film"),
+    )
+    snapshot = tuple(ops)
+    first = to_constraint_delta(ops)
+    second = to_constraint_delta(ops)
+    assert ops == snapshot
+    assert first == second
+
+
+@pytest.mark.parametrize(
+    ("text", "wire_ops", "check"),
+    [
+        (
+            "Czech movies",
+            [
+                IntentOpWire(field="media_type", op="set", value="film"),
+                IntentOpWire(field="origins", op="add", value="Czech Republic"),
+            ],
+            lambda d: (
+                d.media_type == SetOp(value="film")
+                and d.origins == AddOp(values=("Czech Republic",))
+            ),
+        ),
+        (
+            "korean thrillers",
+            [
+                IntentOpWire(field="origins", op="add", value="South Korea"),
+                IntentOpWire(field="genres_include", op="add", value="thriller"),
+            ],
+            lambda d: (
+                d.origins == AddOp(values=("South Korea",))
+                and d.genres_include == AddOp(values=("thriller",))
+            ),
+        ),
+        (
+            "scary movies under 90 minutes",
+            [
+                IntentOpWire(field="media_type", op="set", value="film"),
+                IntentOpWire(field="moods", op="add", value="scary"),
+                IntentOpWire(field="duration_max_min", op="set", value="90"),
+            ],
+            lambda d: (
+                d.media_type == SetOp(value="film")
+                and d.moods == AddOp(values=("scary",))
+                and d.duration_max_min == SetOp(value=90)
+            ),
+        ),
+    ],
+)
+async def test_end_to_end_flat_wire_matches_old_nested_shape(
+    text: str, wire_ops: list[IntentOpWire], check: Any
+) -> None:
+    canned = IntentUpdateWire(
+        intent_class=IntentClass.MOOD_GENRE.value,
+        query_rewrite=text,
+        ops=tuple(wire_ops),
+    )
+    model = _FixedChat(canned=canned)
+    out = await run_intent(
+        empty_turn_state(_ctx(), text=text),
+        cache=FakeCache(),
+        model=model,
+    )
+    delta = out["delta"]
+    assert isinstance(delta, ConstraintDelta)
+    assert check(delta)
+
+
+def test_to_intent_update_preserves_person_soft() -> None:
+    wire = IntentUpdateWire(
+        intent_class=IntentClass.PEOPLE_FUZZY.value,
+        query_rewrite="rewrite",
+        ops=(IntentOpWire(field="year_min", op="set", value="1990"),),
+        person_role="actor",
+        person_era_year_min=1990,
+        person_era_year_max=1999,
+        person_free_hint="older spy",
+        person_mentions=("some guy",),
+    )
+    update = to_intent_update(wire)
+    assert isinstance(update, IntentUpdate)
+    assert update.person_soft == PersonSoft(
+        role="actor", era_year_min=1990, era_year_max=1999, free_hint="older spy"
+    )
+    assert update.person_mentions == ("some guy",)
+    assert update.constraint_delta.year_min == SetOp(value=1990)
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [
+        ConstraintDelta(media_type=SetOp(value="film")),
+        ConstraintDelta(genres_include=AddOp(values=("thriller", "drama"))),
+        ConstraintDelta(origins=ClearOp()),
+        ConstraintDelta(reset_soft=True, moods=AddOp(values=("scary",))),
+        ConstraintDelta(
+            year_min=SetOp(value=1990),
+            year_max=SetOp(value=1999),
+            duration_max_min=SetOp(value=90),
+            local_originals_only=SetOp(value=True),
+        ),
+        ConstraintDelta(genres_exclude=ReplaceOp(values=("horror",))),
+        ConstraintDelta(recency_bias=SetOp(value="new")),
+    ],
+)
+def test_to_wire_round_trips_constraint_delta(delta: ConstraintDelta) -> None:
+    update = IntentUpdate(
+        intent_class=IntentClass.MOOD_GENRE, query_rewrite="rt", constraint_delta=delta
+    )
+    round_tripped = to_intent_update(to_wire(update))
+    assert round_tripped.constraint_delta == delta

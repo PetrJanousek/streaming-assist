@@ -39,7 +39,7 @@ from assist.graph.build import GraphDeps, ainvoke_turn, build_graph
 from assist.graph.state import TurnState, empty_turn_state
 from assist.jobs.fetch import data_dir
 from assist.llm.cost import cost_usd
-from assist.nodes.intent import IntentClass, IntentUpdate, normalize_text
+from assist.nodes.intent import IntentClass, IntentUpdate, normalize_text, to_wire
 from assist.nodes.people import MemoryPeopleIndex
 from assist.nodes.reply import GroundedReply
 from assist.obs.logging import get_logger
@@ -300,10 +300,12 @@ class CachedChat(BaseChatModel):
             self.calls.append(name)
             text = _text_from_input(value)
             entry = self.replay.get(normalize_text(text))
-            if name == "IntentUpdate":
+            if name == "IntentUpdateWire":
                 if entry is None:
-                    return IntentUpdate(intent_class=IntentClass.OTHER, query_rewrite=text.strip())
-                return entry.intent
+                    return to_wire(
+                        IntentUpdate(intent_class=IntentClass.OTHER, query_rewrite=text.strip())
+                    )
+                return to_wire(entry.intent)
             if name == "GroundedReply":
                 if entry is None:
                     return _DEFAULT_REPLY

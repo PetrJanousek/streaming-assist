@@ -7,7 +7,7 @@ and never emits a catalog_id or person_id; person IDs come only from the index.
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Protocol
 
@@ -18,8 +18,12 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationEr
 from assist.config import Settings
 from assist.domain.constraints import (
     AddOp,
+    ClearOp,
     ConstraintDelta,
     ConstraintState,
+    FieldOp,
+    RemoveOp,
+    ReplaceOp,
     SetOp,
 )
 from assist.domain.enums import GenreId, MediaType, MoodId, SpeechAct
@@ -100,6 +104,248 @@ class IntentUpdate(BaseModel):
     person_ids_from_index: tuple[str, ...] = Field(
         default=(),
         description="Always empty. The server ignores this field. Do not fill it.",
+    )
+
+
+# --- T29: flat wire schema -------------------------------------------------
+#
+# `IntentUpdate` above (and its nested `ConstraintDelta`/`FieldOp` union) is
+# still what the rest of the graph works with. It is no longer what crosses
+# the provider boundary: a discriminated union nested 8 `$defs` deep compiles
+# to a ~9.7KB grammar that Anthropic rejects outright (400 invalid_request_
+# error, "compiled grammar is too large"). `IntentOpWire`/`IntentUpdateWire`
+# below are the only schema the model ever sees. `field` is a plain `str`,
+# not an enum, on purpose -- that is most of the size win, and it pushes
+# validation of field names onto `to_constraint_delta` (below), which drops
+# anything it does not recognize rather than raising.
+#
+# Because every op carries one scalar `value`, a list field (e.g.
+# genres_include) arrives as multiple ops sharing the same (field, op) pair.
+# `to_constraint_delta` coalesces those into a single AddOp/RemoveOp/ReplaceOp.
+
+
+class IntentOpWire(BaseModel):
+    """One flat constraint operation as the model emits it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    field: str = Field(description="ConstraintDelta field name, e.g. 'origins'.")
+    op: Literal["set", "add", "remove", "replace", "clear"] = "set"
+    value: str = Field(
+        default="",
+        description="Scalar payload. Ignored for op=clear. List fields repeat this op.",
+    )
+
+
+class IntentUpdateWire(BaseModel):
+    """Flat, provider-facing shape. Adapted to `IntentUpdate` server-side."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    intent_class: str = Field(default=IntentClass.OTHER.value)
+    query_rewrite: str = ""
+    ops: tuple[IntentOpWire, ...] = ()
+    person_role: str | None = None
+    person_era_year_min: int | None = None
+    person_era_year_max: int | None = None
+    person_free_hint: str | None = None
+    person_mentions: tuple[str, ...] = ()
+    reset_soft: bool = False
+
+
+# List-valued ConstraintDelta fields take Add/Remove/Replace; everything else
+# (besides reset_soft, which is not a FieldOp at all) is scalar and takes Set
+# or Clear. This split is not derivable from ConstraintDelta's own typing (a
+# FieldOp slot accepts any of the five op classes regardless of the target's
+# real shape) so it is spelled out once, here, and nowhere else.
+_LIST_DELTA_FIELDS = frozenset({"genres_include", "genres_exclude", "moods", "origins"})
+_INT_DELTA_FIELDS = frozenset({"year_min", "year_max", "duration_max_min"})
+_BOOL_DELTA_FIELDS = frozenset({"local_originals_only"})
+# Forbidden regardless of validity: person ids come only from the index (T18),
+# and the catalog has no language field -- the prompt maps languages to origins.
+_FORBIDDEN_DELTA_FIELDS = frozenset({"languages", "people_include", "people_exclude"})
+_LIST_OP_CLASSES: dict[str, type[AddOp | RemoveOp | ReplaceOp]] = {
+    "add": AddOp,
+    "remove": RemoveOp,
+    "replace": ReplaceOp,
+}
+
+
+def _coerce_int(value: str) -> int | None:
+    try:
+        return int(value.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _coerce_bool(value: str) -> bool | None:
+    lowered = value.strip().lower() if isinstance(value, str) else ""
+    if lowered in {"true", "1", "yes"}:
+        return True
+    if lowered in {"false", "0", "no"}:
+        return False
+    return None
+
+
+def _op_parts(raw: object) -> tuple[str, str, str]:
+    """Pull (field, op, value) out of anything -- a real IntentOpWire, a dict,
+    or plain garbage. Never raises: malformed input just yields empty parts,
+    which the caller then drops."""
+    if isinstance(raw, IntentOpWire):
+        return raw.field, raw.op, raw.value
+    if isinstance(raw, Mapping):
+        field = raw.get("field", "")
+        op = raw.get("op", "")
+        value = raw.get("value", "")
+    else:
+        field = getattr(raw, "field", "")
+        op = getattr(raw, "op", "")
+        value = getattr(raw, "value", "")
+    field = field if isinstance(field, str) else ""
+    op = op if isinstance(op, str) else ""
+    if not isinstance(value, str):
+        value = "" if value is None else str(value)
+    return field, op, value
+
+
+def to_constraint_delta(
+    ops: Sequence[object] | None, *, reset_soft: bool = False
+) -> ConstraintDelta:
+    """Adapt flat wire ops into a `ConstraintDelta`. Pure: no I/O, no mutation
+    of `ops`, deterministic, never raises -- unrecognized fields, ops the
+    merge algebra could not use, and bad values are dropped, not coerced."""
+    allowed_fields = frozenset(ConstraintDelta.model_fields) - {"reset_soft"}
+    scalar_fields = allowed_fields - _LIST_DELTA_FIELDS
+
+    list_ops: dict[str, tuple[str, list[str]]] = {}
+    single_ops: dict[str, FieldOp] = {}
+
+    for raw in ops or ():
+        field, op, value = _op_parts(raw)
+        if field == "reset_soft":
+            if op == "set":
+                coerced = _coerce_bool(value)
+                if coerced is not None:
+                    reset_soft = coerced
+            continue
+        if field not in allowed_fields or field in _FORBIDDEN_DELTA_FIELDS:
+            continue
+        if op == "clear":
+            # Clear is valid on both list and scalar fields; it supersedes
+            # any op already collected for this field this turn.
+            single_ops[field] = ClearOp()
+            list_ops.pop(field, None)
+            continue
+        if field in _LIST_DELTA_FIELDS:
+            if op not in _LIST_OP_CLASSES or not value:
+                continue
+            existing = list_ops.get(field)
+            if existing is not None and existing[0] == op:
+                if value not in existing[1]:
+                    existing[1].append(value)
+            else:
+                list_ops[field] = (op, [value])
+            single_ops.pop(field, None)
+        elif field in scalar_fields:
+            if op != "set" or not value:
+                continue
+            if field in _INT_DELTA_FIELDS:
+                coerced_int = _coerce_int(value)
+                if coerced_int is None:
+                    continue
+                single_ops[field] = SetOp(value=coerced_int)
+            elif field in _BOOL_DELTA_FIELDS:
+                coerced_bool = _coerce_bool(value)
+                if coerced_bool is None:
+                    continue
+                single_ops[field] = SetOp(value=coerced_bool)
+            else:
+                single_ops[field] = SetOp(value=value)
+            list_ops.pop(field, None)
+
+    payload: dict[str, object] = dict(single_ops)
+    for field, (op_name, values) in list_ops.items():
+        payload[field] = _LIST_OP_CLASSES[op_name](values=tuple(values))
+    payload["reset_soft"] = reset_soft
+    return ConstraintDelta.model_validate(payload)
+
+
+def _person_soft_from_wire(wire: IntentUpdateWire) -> PersonSoft | None:
+    if (
+        wire.person_role is None
+        and wire.person_era_year_min is None
+        and wire.person_era_year_max is None
+        and not wire.person_free_hint
+    ):
+        return None
+    return PersonSoft(
+        role=wire.person_role,
+        era_year_min=wire.person_era_year_min,
+        era_year_max=wire.person_era_year_max,
+        free_hint=wire.person_free_hint,
+    )
+
+
+def to_intent_update(wire: IntentUpdateWire) -> IntentUpdate:
+    """Adapt the flat provider-facing shape into the internal `IntentUpdate`.
+    Everything downstream of this call (merge, cache, eval) is unchanged."""
+    return IntentUpdate(
+        intent_class=_parse_intent_class(wire.intent_class),
+        query_rewrite=wire.query_rewrite,
+        constraint_delta=to_constraint_delta(wire.ops, reset_soft=wire.reset_soft),
+        person_soft=_person_soft_from_wire(wire),
+        person_mentions=tuple(wire.person_mentions),
+    )
+
+
+def _scalar_to_wire_value(value: bool | int | str) -> str:
+    # Inverse of _coerce_bool/_coerce_int: bool is checked before int since
+    # bool is an int subclass in Python.
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _delta_field_to_ops(field: str, field_op: FieldOp | None) -> list[IntentOpWire]:
+    """Expand one ConstraintDelta field's FieldOp back into flat wire ops.
+    None -> no ops. ClearOp -> one op, value ignored. Add/Remove/Replace ->
+    one op per value, since the wire schema carries one scalar per op."""
+    if field_op is None:
+        return []
+    if isinstance(field_op, ClearOp):
+        return [IntentOpWire(field=field, op="clear")]
+    if isinstance(field_op, SetOp):
+        return [IntentOpWire(field=field, op="set", value=_scalar_to_wire_value(field_op.value))]
+    if isinstance(field_op, AddOp | RemoveOp | ReplaceOp):
+        return [IntentOpWire(field=field, op=field_op.op, value=v) for v in field_op.values]
+    return []
+
+
+def to_wire(update: IntentUpdate) -> IntentUpdateWire:
+    """Adapt the internal `IntentUpdate` into the flat provider-facing shape.
+    The inverse of `to_intent_update`: expands `ConstraintDelta`'s `FieldOp`s
+    back into flat ops (one op per value for list ops), and folds `reset_soft`
+    onto the wire model's own field rather than a synthetic op -- symmetric
+    with how `to_constraint_delta` special-cases a `field == "reset_soft"` op,
+    but the round trip does not require emitting one."""
+    delta = update.constraint_delta
+    ops: list[IntentOpWire] = []
+    for field in ConstraintDelta.model_fields:
+        if field == "reset_soft":
+            continue
+        ops.extend(_delta_field_to_ops(field, getattr(delta, field)))
+
+    person_soft = update.person_soft
+    return IntentUpdateWire(
+        intent_class=update.intent_class.value,
+        query_rewrite=update.query_rewrite,
+        ops=tuple(ops),
+        person_role=person_soft.role if person_soft else None,
+        person_era_year_min=person_soft.era_year_min if person_soft else None,
+        person_era_year_max=person_soft.era_year_max if person_soft else None,
+        person_free_hint=person_soft.free_hint if person_soft else None,
+        person_mentions=tuple(update.person_mentions),
+        reset_soft=delta.reset_soft,
     )
 
 
@@ -498,17 +744,22 @@ async def _from_llm(
 ) -> dict[str, object]:
     fallback_used = False
 
-    def _fallback(_input: Any) -> IntentUpdate:
+    def _fallback(_input: Any) -> IntentUpdateWire:
+        # Return type must match the wire schema (structured_output's TSchema),
+        # but its content is never read: fallback_used short-circuits below to
+        # the same rules-degrade path the old nested-schema fallback used.
         nonlocal fallback_used
         fallback_used = True
-        return _rules_or_empty(text)
+        return IntentUpdateWire()
 
     handler = cost_handler if cost_handler is not None else CostCallbackHandler()
     # Gateway helper, not ChatAnthropic.with_structured_output: default method is
     # function_calling and would bind tools (invariant 1). Always pass fallback so
-    # a schema miss degrades instead of raising LLMSchemaError.
+    # a schema miss degrades instead of raising LLMSchemaError. IntentUpdateWire,
+    # not IntentUpdate, is what crosses the provider boundary (T29): the nested
+    # FieldOp union compiled to a grammar Anthropic rejected as too large.
     chain = chat_prompt_template("intent") | structured_output(
-        IntentUpdate,
+        IntentUpdateWire,
         fallback=RunnableLambda(_fallback),
         model=model,
         settings=settings,
@@ -521,19 +772,19 @@ async def _from_llm(
     }
     config: RunnableConfig = {"callbacks": [handler]}
     try:
-        raw = await chain.ainvoke(payload, config=config)
+        wire = await chain.ainvoke(payload, config=config)
     except LLMError:
         log.info("intent_llm_failed", reason="gateway")
         return _state_from_update(_rules_or_empty(text), source="rules")
 
-    if not isinstance(raw, IntentUpdate):
-        log.info("intent_llm_failed", reason="not_intent_update")
+    if not isinstance(wire, IntentUpdateWire):
+        log.info("intent_llm_failed", reason="not_intent_update_wire")
         return _state_from_update(_rules_or_empty(text), source="rules")
 
     if fallback_used:
-        return _state_from_update(raw, source="rules")
+        return _state_from_update(_rules_or_empty(text), source="rules")
 
-    update = _sanitize_model_intent(raw)
+    update = _sanitize_model_intent(to_intent_update(wire))
     await _cache_put(cache, text, constraints, update)
     return _state_from_update(
         update,

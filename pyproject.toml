@@ -42,3 +42,6 @@ build-backend = "uv_build"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "live: makes a real network call to a live provider; deselect with -m \"not live\"",
+]
