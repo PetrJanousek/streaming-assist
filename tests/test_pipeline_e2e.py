@@ -29,7 +29,7 @@ from assist.domain.enums import (
 )
 from assist.graph.build import GraphDeps, ainvoke_turn, build_graph
 from assist.graph.state import ReplyChip, empty_turn_state
-from assist.nodes.intent import IntentClass, IntentUpdate
+from assist.nodes.intent import IntentClass, IntentUpdate, to_wire
 from assist.nodes.people import MemoryPeopleIndex
 from assist.nodes.reply import GroundedReply
 from assist.stores.session import Session, SessionBindError
@@ -209,8 +209,8 @@ class ScriptedChat(BaseChatModel):
                 raise TimeoutError("llm timeout")
             if self.mode == "schema" and name == "GroundedReply":
                 raise OutputParserException("bad schema")
-            if name == "IntentUpdate":
-                return self.intent
+            if name == "IntentUpdateWire":
+                return to_wire(self.intent)
             if name == "GroundedReply":
                 return self.reply
             raise TypeError(name)

@@ -5,26 +5,32 @@ Never name a title from memory.
 Never emit a catalog_id or a person_id.
 Leave person_ids_from_index as an empty list. Person identity is resolved later from the index, not by you.
 
-Return only IntentUpdate fields:
+Return only these fields:
 - intent_class: one of mood_genre, people_fuzzy, known_item, duration, reset, other
 - query_rewrite: a short English search string for retrieval. Do not guess a title name.
-- constraint_delta: per-field ops on sticky filters
-- person_soft: optional role, era_year_min, era_year_max, free_hint. No ids.
+- ops: a flat list of constraint operations (see below). Not an object keyed by field.
+- person_role, person_era_year_min, person_era_year_max, person_free_hint: optional soft person
+  descriptors. No ids.
 - person_mentions: display names only, never ids
-- person_ids_from_index: always []
+- reset_soft: true only for an explicit start-over / anything / forget-that request
 
-## FieldOp rules (mandatory)
+## Op rules (mandatory)
 
-Each constraint field is a FieldOp. The discriminator is `op`.
+Each entry in `ops` is one flat object: `{{"field": "<name>", "op": "<op>", "value": "<text>"}}`.
+There is no nested per-field object anymore -- every operation, on every field, is one of these
+three keys. `value` is always a string; write numbers and booleans as their string form
+(`"1990"`, `"true"`).
 
 - set: put this scalar in place. Requires `value`. Use for media_type, year_min, year_max, duration_max_min, local_originals_only, recency_bias, maturity_request_stricter.
-- add: union onto a list. Requires `values`. Use for genres_include, genres_exclude, moods, origins.
-- remove: drop listed values from a list. Requires `values`. Only if the user asks to drop those values.
-- replace: replace a whole list. Requires `values`. Rare.
-- clear: DELETE the filter. No value.
+- add: union onto a list. Requires `value`. Use for genres_include, genres_exclude, moods, origins.
+  A list field with several values is SEVERAL ops, one value each, not one op with many values --
+  e.g. two ops both `{{"field":"origins","op":"add",...}}`, each carrying one country.
+- remove: drop one listed value from a list. Requires `value`. Only if the user asks to drop that value.
+- replace: replace a whole list, one op per surviving value. Rare.
+- clear: DELETE the filter. `value` is ignored; omit it or leave it empty.
 
 A user STATING a constraint means they want that filter ON.
-That is `op=set` (scalars) or `op=add` (lists). Never `op=clear`.
+That is `op=set` (scalars) or `op=add` (lists), one op per emitted field or value. Never `op=clear`.
 
 `op=clear` is ONLY for an explicit removal request, such as:
 "any country", "drop the year limit", "not just Czech", "clear the duration cap",
@@ -37,7 +43,7 @@ RIGHT: emit op=set or op=add with the canonical value.
 Never emit languages. The catalog has no language field. If the user names a language,
 map it to the matching origin (see aliases below). Do not emit audience or pace.
 
-Do not emit people_include or people_exclude. Put person names in person_mentions only.
+Do not emit people_include or people_exclude ops. Put person names in person_mentions only.
 
 ## Extractable fields
 
@@ -84,32 +90,33 @@ Filipino / Philippines → Philippines
 
 ## Worked examples
 
-constraint_delta is an OBJECT keyed by field name. Unused fields are null.
-Never emit {{"op":"clear"}} for a stated constraint. Never emit {{}} for a field.
+`ops` is a FLAT LIST. One op per field, except a list field with multiple values gets
+one op per value, all sharing the same field and op.
+Never emit {{"op":"clear"}} for a stated constraint. Never emit an empty op for a field.
 
 "Czech movies":
-{{"intent_class":"mood_genre","query_rewrite":"Czech films","constraint_delta":{{"media_type":{{"op":"set","value":"film"}},"origins":{{"op":"add","values":["Czech Republic"]}}}},"person_soft":null,"person_mentions":[],"person_ids_from_index":[]}}
+{{"intent_class":"mood_genre","query_rewrite":"Czech films","ops":[{{"field":"media_type","op":"set","value":"film"}},{{"field":"origins","op":"add","value":"Czech Republic"}}],"person_mentions":[],"reset_soft":false}}
 
 "movies from the 90s":
-{{"intent_class":"duration","query_rewrite":"1990s films","constraint_delta":{{"media_type":{{"op":"set","value":"film"}},"year_min":{{"op":"set","value":1990}},"year_max":{{"op":"set","value":1999}}}},"person_soft":null,"person_mentions":[],"person_ids_from_index":[]}}
+{{"intent_class":"duration","query_rewrite":"1990s films","ops":[{{"field":"media_type","op":"set","value":"film"}},{{"field":"year_min","op":"set","value":"1990"}},{{"field":"year_max","op":"set","value":"1999"}}],"person_mentions":[],"reset_soft":false}}
 
 "korean thrillers":
-{{"intent_class":"mood_genre","query_rewrite":"Korean thrillers","constraint_delta":{{"origins":{{"op":"add","values":["South Korea"]}},"genres_include":{{"op":"add","values":["thriller"]}}}},"person_soft":null,"person_mentions":[],"person_ids_from_index":[]}}
+{{"intent_class":"mood_genre","query_rewrite":"Korean thrillers","ops":[{{"field":"origins","op":"add","value":"South Korea"}},{{"field":"genres_include","op":"add","value":"thriller"}}],"person_mentions":[],"reset_soft":false}}
 
 "something in french":
-{{"intent_class":"mood_genre","query_rewrite":"French titles","constraint_delta":{{"origins":{{"op":"add","values":["France"]}}}},"person_soft":null,"person_mentions":[],"person_ids_from_index":[]}}
+{{"intent_class":"mood_genre","query_rewrite":"French titles","ops":[{{"field":"origins","op":"add","value":"France"}}],"person_mentions":[],"reset_soft":false}}
 
 "scary movies under 90 minutes":
-{{"intent_class":"duration","query_rewrite":"scary short films","constraint_delta":{{"media_type":{{"op":"set","value":"film"}},"moods":{{"op":"add","values":["scary"]}},"duration_max_min":{{"op":"set","value":90}}}},"person_soft":null,"person_mentions":[],"person_ids_from_index":[]}}
+{{"intent_class":"duration","query_rewrite":"scary short films","ops":[{{"field":"media_type","op":"set","value":"film"}},{{"field":"moods","op":"add","value":"scary"}},{{"field":"duration_max_min","op":"set","value":"90"}}],"person_mentions":[],"reset_soft":false}}
 
 "tv shows not movies":
-{{"intent_class":"other","query_rewrite":"tv series","constraint_delta":{{"media_type":{{"op":"set","value":"series"}}}},"person_soft":null,"person_mentions":[],"person_ids_from_index":[]}}
+{{"intent_class":"other","query_rewrite":"tv series","ops":[{{"field":"media_type","op":"set","value":"series"}}],"person_mentions":[],"reset_soft":false}}
 
 "not just Czech" / "any country":
-{{"intent_class":"other","query_rewrite":"any origin","constraint_delta":{{"origins":{{"op":"clear"}}}},"person_soft":null,"person_mentions":[],"person_ids_from_index":[]}}
+{{"intent_class":"other","query_rewrite":"any origin","ops":[{{"field":"origins","op":"clear","value":""}}],"person_mentions":[],"reset_soft":false}}
 
 "start over":
-{{"intent_class":"reset","query_rewrite":"","constraint_delta":{{"reset_soft":true}},"person_soft":null,"person_mentions":[],"person_ids_from_index":[]}}
+{{"intent_class":"reset","query_rewrite":"","ops":[],"person_mentions":[],"reset_soft":true}}
 
 Current sticky constraints (JSON):
 {constraints_json}
@@ -117,4 +124,6 @@ Current sticky constraints (JSON):
 User message:
 {text}
 
-Final check: every constraint the user stated must use op=set (scalars) or op=add (lists) with a value. op=clear means delete the filter. Copy the object shape from the examples above.
+Final check: every constraint the user stated must use op=set (scalars) or op=add (lists) with a
+value, one op per field or per value. op=clear means delete the filter. Copy the ops-list shape
+from the examples above.
